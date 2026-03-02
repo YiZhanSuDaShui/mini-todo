@@ -30,6 +30,8 @@ const currentConfigId = computed(() => appStore.currentScreenConfigId)
 
 // 日历显示
 const showCalendar = computed(() => appStore.showCalendar)
+// 贴边自动隐藏
+const autoHideEnabled = computed(() => appStore.autoHideEnabled)
 
 // 是否有更新
 const hasUpdate = computed(() => appStore.hasUpdate)
@@ -56,6 +58,8 @@ onMounted(async () => {
   
   // 加载日历显示状态
   await appStore.loadShowCalendar()
+  // 加载贴边自动隐藏状态
+  await appStore.loadAutoHideEnabled()
 })
 
 // 删除屏幕配置
@@ -294,6 +298,20 @@ async function handleCheckUpdate() {
             <el-switch 
               :model-value="showCalendar"
               @change="(val: boolean) => appStore.setShowCalendar(val)"
+            />
+          </div>
+
+          <div class="settings-row">
+            <div class="row-left">
+              <el-icon class="row-icon"><Monitor /></el-icon>
+              <div class="row-content">
+                <span class="settings-label">贴边自动隐藏</span>
+                <span class="settings-desc">固定模式下，贴边后自动隐藏并在边缘唤起</span>
+              </div>
+            </div>
+            <el-switch
+              :model-value="autoHideEnabled"
+              @change="(val: boolean) => appStore.setAutoHideEnabled(val)"
             />
           </div>
           

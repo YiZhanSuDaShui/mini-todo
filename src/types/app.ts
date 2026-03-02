@@ -18,6 +18,7 @@ export interface AppSettings {
   windowPosition: WindowPosition | null
   windowSize: WindowSize | null
   isFixed: boolean
+  autoHideEnabled: boolean
   /** 文本主题：light（浅色文字，适配深色背景）或 dark（深色文字，适配浅色背景）*/
   textTheme: TextTheme
 }

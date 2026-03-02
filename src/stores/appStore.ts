@@ -11,6 +11,11 @@ export const APP_VERSION = ref<string>('')
 const GITHUB_OWNER = 'dreamlonglll'
 const GITHUB_REPO = 'mini-todo'
 
+interface WindowPersistState {
+  position: WindowPosition
+  size: WindowSize
+}
+
 export const useAppStore = defineStore('app', () => {
   async function loadAppVersion() {
     if (APP_VERSION.value) return
@@ -33,6 +38,8 @@ export const useAppStore = defineStore('app', () => {
   
   // 日历显示状态
   const showCalendar = ref(false)
+  // 是否启用贴边自动隐藏
+  const autoHideEnabled = ref(true)
   
   // 版本更新相关状态
   const hasUpdate = ref(false)
@@ -103,6 +110,9 @@ export const useAppStore = defineStore('app', () => {
       // 生成当前屏幕配置标识
       currentScreenConfigId.value = await generateScreenConfigId()
       console.log('Current screen config ID:', currentScreenConfigId.value)
+
+      // 加载贴边自动隐藏设置（需在固定模式应用前准备）
+      await loadAutoHideEnabled()
       
       // 尝试获取当前屏幕配置的保存记录
       const savedConfig = await invoke<ScreenConfig | null>('get_screen_config', {
@@ -196,6 +206,16 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
+  // 加载贴边自动隐藏设置
+  async function loadAutoHideEnabled() {
+    try {
+      autoHideEnabled.value = await invoke<boolean>('get_auto_hide_enabled')
+    } catch (e) {
+      console.error('Failed to load auto hide setting:', e)
+      autoHideEnabled.value = true
+    }
+  }
+
   // 切换日历显示
   async function toggleShowCalendar() {
     try {
@@ -214,6 +234,19 @@ export const useAppStore = defineStore('app', () => {
       await invoke('set_show_calendar', { show })
     } catch (e) {
       console.error('Failed to set show calendar:', e)
+    }
+  }
+
+  // 设置贴边自动隐藏
+  async function setAutoHideEnabled(enabled: boolean) {
+    const oldValue = autoHideEnabled.value
+    try {
+      autoHideEnabled.value = enabled
+      await invoke('set_auto_hide_enabled', { enabled })
+      await saveWindowState()
+    } catch (e) {
+      console.error('Failed to set auto hide enabled:', e)
+      autoHideEnabled.value = oldValue
     }
   }
 
@@ -271,8 +304,9 @@ export const useAppStore = defineStore('app', () => {
   // 保存窗口状态（位置和尺寸）到当前屏幕配置
   async function saveWindowState() {
     try {
-      const position = await appWindow.outerPosition()
-      const size = await appWindow.outerSize()
+      const persistState = await invoke<WindowPersistState>('get_window_persist_state')
+      const position = persistState.position
+      const size = persistState.size
       windowPosition.value = { x: position.x, y: position.y }
       windowSize.value = { width: size.width, height: size.height }
       
@@ -287,8 +321,8 @@ export const useAppStore = defineStore('app', () => {
         displayName: generateScreenConfigDisplayName(currentScreenConfigId.value),
         windowX: position.x,
         windowY: position.y,
-        windowWidth: size.width,
-        windowHeight: size.height,
+        windowWidth: Math.round(size.width),
+        windowHeight: Math.round(size.height),
         isFixed: isFixed.value
       }
       
@@ -300,6 +334,7 @@ export const useAppStore = defineStore('app', () => {
           isFixed: isFixed.value,
           windowPosition: windowPosition.value,
           windowSize: windowSize.value,
+          autoHideEnabled: autoHideEnabled.value,
           textTheme: 'light'
         }
       })
@@ -431,6 +466,7 @@ export const useAppStore = defineStore('app', () => {
     screenConfigs,
     // 日历状态
     showCalendar,
+    autoHideEnabled,
     // 方法
     initSettings,
     toggleFixedMode,
@@ -448,6 +484,9 @@ export const useAppStore = defineStore('app', () => {
     // 日历方法
     loadShowCalendar,
     toggleShowCalendar,
-    setShowCalendar
+    setShowCalendar,
+    // 自动隐藏方法
+    loadAutoHideEnabled,
+    setAutoHideEnabled
   }
 })

@@ -1,27 +1,21 @@
-use tauri::State;
+use crate::db::{AppSettings, Database, ExportData, SubTask, Todo, WindowPosition, WindowSize};
 use chrono::Local;
-use crate::db::{Database, Todo, SubTask, ExportData, AppSettings, WindowPosition, WindowSize};
+use tauri::State;
 
 /// 从 settings 表读取字符串值的辅助函数
 fn get_setting_string(conn: &rusqlite::Connection, key: &str, default: &str) -> String {
-    conn.query_row(
-        "SELECT value FROM settings WHERE key = ?1",
-        [key],
-        |row| row.get(0),
-    )
+    conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
+        row.get(0)
+    })
     .unwrap_or_else(|_| default.to_string())
 }
 
 /// 从 settings 表读取布尔值的辅助函数
 fn get_setting_bool(conn: &rusqlite::Connection, key: &str, default: bool) -> bool {
-    conn.query_row(
-        "SELECT value FROM settings WHERE key = ?1",
-        [key],
-        |row| {
-            let val: String = row.get(0)?;
-            Ok(val == "true")
-        },
-    )
+    conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
+        let val: String = row.get(0)?;
+        Ok(val == "true")
+    })
     .unwrap_or(default)
 }
 
@@ -32,7 +26,7 @@ pub fn export_data(db: State<Database>) -> Result<String, String> {
         let mut stmt = conn.prepare(
             "SELECT id, title, description, color, quadrant, notify_at, notify_before, 
                     notified, completed, sort_order, start_time, end_time, created_at, updated_at 
-             FROM todos ORDER BY sort_order ASC"
+             FROM todos ORDER BY sort_order ASC",
         )?;
 
         let todo_iter = stmt.query_map([], |row| {
@@ -61,7 +55,7 @@ pub fn export_data(db: State<Database>) -> Result<String, String> {
         for todo in &mut todos {
             let mut subtask_stmt = conn.prepare(
                 "SELECT id, parent_id, title, completed, sort_order, created_at, updated_at 
-                 FROM subtasks WHERE parent_id = ? ORDER BY sort_order ASC"
+                 FROM subtasks WHERE parent_id = ? ORDER BY sort_order ASC",
             )?;
 
             let subtask_iter = subtask_stmt.query_map([todo.id], |row| {
@@ -105,6 +99,7 @@ pub fn export_data(db: State<Database>) -> Result<String, String> {
             .unwrap_or(None);
 
         let text_theme = get_setting_string(conn, "text_theme", "dark");
+        let auto_hide_enabled = get_setting_bool(conn, "auto_hide_enabled", true);
         let show_calendar = get_setting_bool(conn, "show_calendar", false);
         let view_mode = get_setting_string(conn, "view_mode", "list");
         let notification_type = get_setting_string(conn, "notification_type", "system");
@@ -113,6 +108,7 @@ pub fn export_data(db: State<Database>) -> Result<String, String> {
             is_fixed,
             window_position,
             window_size,
+            auto_hide_enabled,
             text_theme,
             show_calendar,
             view_mode,
@@ -138,8 +134,8 @@ pub fn export_data(db: State<Database>) -> Result<String, String> {
 
 #[tauri::command]
 pub fn import_data(db: State<Database>, json_data: String) -> Result<(), String> {
-    let import_data: ExportData = serde_json::from_str(&json_data)
-        .map_err(|e| format!("Invalid JSON format: {}", e))?;
+    let import_data: ExportData =
+        serde_json::from_str(&json_data).map_err(|e| format!("Invalid JSON format: {}", e))?;
 
     db.with_connection(|conn| {
         // 清空现有数据
@@ -209,6 +205,12 @@ pub fn import_data(db: State<Database>, json_data: String) -> Result<(), String>
                 [&size_json],
             )?;
         }
+
+        // 导入贴边自动隐藏设置
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('auto_hide_enabled', ?, datetime('now', 'localtime'))",
+            [if import_data.settings.auto_hide_enabled { "true" } else { "false" }],
+        )?;
 
         // 导入文本主题
         conn.execute(

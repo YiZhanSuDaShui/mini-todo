@@ -6,6 +6,7 @@ import { useTodoStore, useAppStore } from '@/stores'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { getCurrentWindow, primaryMonitor, currentMonitor } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
+import { invoke } from '@tauri-apps/api/core'
 import TitleBar from '@/components/TitleBar.vue'
 import TodoList from '@/components/TodoList.vue'
 import QuadrantView from '@/components/QuadrantView.vue'
@@ -112,6 +113,22 @@ function debouncedSaveState() {
   }, 500)
 }
 
+async function reportAutoHideCursorInside(inside: boolean) {
+  try {
+    await invoke('set_auto_hide_cursor_inside', { inside })
+  } catch {
+    // 忽略：该命令仅用于自动隐藏唤起辅助，不影响主流程
+  }
+}
+
+function handleRootMouseEnter() {
+  void reportAutoHideCursorInside(true)
+}
+
+function handleRootMouseLeave() {
+  void reportAutoHideCursorInside(false)
+}
+
 // 初始化
 onMounted(async () => {
   await appStore.initSettings()
@@ -166,6 +183,9 @@ onMounted(async () => {
       await bringModalToFront()
     }
   })
+
+  // 初始化鼠标在窗口内状态（用于 macOS 自动隐藏唤起）
+  void reportAutoHideCursorInside(true)
 })
 
 // 清理
@@ -182,6 +202,7 @@ onUnmounted(() => {
   if (saveDebounceTimer.value) {
     clearTimeout(saveDebounceTimer.value)
   }
+  void reportAutoHideCursorInside(false)
 })
 
 // 打开编辑器窗口（模态）
@@ -318,7 +339,11 @@ async function openSettings() {
 </script>
 
 <template>
-  <div :class="[containerClass, { 'with-calendar': showCalendar }]">
+  <div
+    :class="[containerClass, { 'with-calendar': showCalendar }]"
+    @mouseenter="handleRootMouseEnter"
+    @mouseleave="handleRootMouseLeave"
+  >
     <!-- 模态遮罩层 -->
     <div v-if="isModalOpen" class="modal-overlay" @mousedown="bringModalToFront"></div>
     

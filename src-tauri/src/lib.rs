@@ -1,42 +1,65 @@
-mod db;
 mod commands;
+mod db;
 mod services;
 
 use db::Database;
 use services::NotificationService;
-use tauri::{Manager, Emitter};
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri_plugin_autostart::ManagerExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Emitter, Manager};
+use tauri_plugin_autostart::ManagerExt;
 
 // 记录上次点击时间（用于双击检测）
 static LAST_CLICK_TIME: AtomicU64 = AtomicU64::new(0);
 const DOUBLE_CLICK_THRESHOLD_MS: u64 = 500;
 use commands::{
-    get_todos, create_todo, update_todo, delete_todo, reorder_todos,
-    create_subtask, update_subtask, delete_subtask,
-    get_settings, save_settings, set_window_fixed_mode, reset_window,
-    export_data, import_data,
-    is_fixed_mode,
-    // 屏幕配置命令
-    get_screen_config, save_screen_config, list_screen_configs, delete_screen_config, update_screen_config_name,
-    // 日历设置命令
-    get_show_calendar, set_show_calendar,
+    close_all_notification_windows,
+    // 通知窗口命令
+    close_notification_window,
+    create_subtask,
+    create_todo,
+    delete_screen_config,
+    delete_subtask,
+    delete_todo,
+    export_data,
     // 节假日命令
     fetch_holidays,
+    // 日历设置命令
+    get_auto_hide_enabled,
     // 通知设置命令
-    get_notification_type, set_notification_type,
-    // 通知窗口命令
-    close_notification_window, close_all_notification_windows,
+    get_notification_type,
+    // 屏幕配置命令
+    get_screen_config,
+    get_settings,
+    get_show_calendar,
+    get_todos,
+    get_window_persist_state,
+    import_data,
+    is_fixed_mode,
+    list_screen_configs,
+    reorder_todos,
+    reset_window,
+    save_screen_config,
+    save_settings,
+    set_auto_hide_cursor_inside,
+    set_auto_hide_enabled,
+    set_notification_type,
+    set_show_calendar,
+    set_window_fixed_mode,
+    update_screen_config_name,
+    update_subtask,
+    update_todo,
 };
 
 #[cfg(target_os = "windows")]
 fn setup_window_rounded_corners(window: &tauri::WebviewWindow) {
     use raw_window_handle::HasWindowHandle;
-    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND};
     use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    };
 
     if let Ok(handle) = window.window_handle() {
         if let raw_window_handle::RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
@@ -76,30 +99,46 @@ pub fn run() {
                     setup_window_rounded_corners(&window);
                 }
             }
-            
+
             // 创建系统托盘菜单项
-            let toggle_fixed_text = if is_fixed_mode() { "取消固定" } else { "固定窗口" };
-            let toggle_fixed = MenuItem::with_id(app, "toggle_fixed", toggle_fixed_text, true, None::<&str>)?;
+            let toggle_fixed_text = if is_fixed_mode() {
+                "取消固定"
+            } else {
+                "固定窗口"
+            };
+            let toggle_fixed =
+                MenuItem::with_id(app, "toggle_fixed", toggle_fixed_text, true, None::<&str>)?;
             let reset = MenuItem::with_id(app, "reset", "重置位置", true, None::<&str>)?;
             let add_todo = MenuItem::with_id(app, "add_todo", "添加待办项", true, None::<&str>)?;
-            let open_settings = MenuItem::with_id(app, "open_settings", "打开设置", true, None::<&str>)?;
+            let open_settings =
+                MenuItem::with_id(app, "open_settings", "打开设置", true, None::<&str>)?;
             let auto_start_enabled = app.autolaunch().is_enabled().unwrap_or(false);
-            let auto_start = CheckMenuItem::with_id(app, "auto_start", "开机自启动", true, auto_start_enabled, None::<&str>)?;
+            let auto_start = CheckMenuItem::with_id(
+                app,
+                "auto_start",
+                "开机自启动",
+                true,
+                auto_start_enabled,
+                None::<&str>,
+            )?;
             let separator1 = PredefinedMenuItem::separator(app)?;
             let separator2 = PredefinedMenuItem::separator(app)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            
-            let menu = Menu::with_items(app, &[
-                &add_todo,
-                &separator1,
-                &toggle_fixed,
-                &reset,
-                &open_settings,
-                &auto_start,
-                &separator2,
-                &quit,
-            ])?;
-            
+
+            let menu = Menu::with_items(
+                app,
+                &[
+                    &add_todo,
+                    &separator1,
+                    &toggle_fixed,
+                    &reset,
+                    &open_settings,
+                    &auto_start,
+                    &separator2,
+                    &quit,
+                ],
+            )?;
+
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
@@ -112,7 +151,11 @@ pub fn run() {
                                 let _ = window.emit::<()>("tray-toggle-fixed", ());
                             }
                             // 更新菜单项文本
-                            let new_text = if is_fixed_mode() { "固定窗口" } else { "取消固定" };
+                            let new_text = if is_fixed_mode() {
+                                "固定窗口"
+                            } else {
+                                "取消固定"
+                            };
                             let _ = toggle_fixed.set_text(new_text);
                         }
                         "reset" => {
@@ -168,9 +211,9 @@ pub fn run() {
                             .unwrap()
                             .as_millis() as u64;
                         let last_click = LAST_CLICK_TIME.swap(now, Ordering::SeqCst);
-                        
+
                         let app = tray.app_handle();
-                        
+
                         // 检测双击
                         if now - last_click < DOUBLE_CLICK_THRESHOLD_MS {
                             // 双击：打开添加待办窗口
@@ -190,16 +233,16 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
-            
+
             // 启动通知调度器
             NotificationService::start_scheduler(app.handle().clone());
-            
+
             // 启动固定模式监听器（定时检测窗口最小化状态）
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 loop {
                     std::thread::sleep(std::time::Duration::from_millis(200));
-                    
+
                     // 只在固定模式下检测
                     if is_fixed_mode() {
                         if let Some(window) = handle.get_webview_window("main") {
@@ -208,11 +251,14 @@ pub fn run() {
                                 let _ = window.unminimize();
                                 let _ = window.show();
                             }
+
+                            // 固定模式下贴边自动隐藏/唤起
+                            commands::tick_auto_hide(&window);
                         }
                     }
                 }
             });
-            
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -230,6 +276,10 @@ pub fn run() {
             get_settings,
             save_settings,
             set_window_fixed_mode,
+            get_auto_hide_enabled,
+            set_auto_hide_enabled,
+            set_auto_hide_cursor_inside,
+            get_window_persist_state,
             reset_window,
             // 屏幕配置命令
             get_screen_config,

@@ -17,6 +17,12 @@ interface WindowPersistState {
 }
 
 export const useAppStore = defineStore('app', () => {
+  function applyPlatformClass() {
+    const ua = navigator.userAgent.toLowerCase()
+    const isMacOS = ua.includes('macintosh') || ua.includes('mac os x')
+    document.body.classList.toggle('platform-macos', isMacOS)
+  }
+
   async function loadAppVersion() {
     if (APP_VERSION.value) return
     try {
@@ -105,6 +111,7 @@ export const useAppStore = defineStore('app', () => {
   // 初始化应用设置
   async function initSettings() {
     try {
+      applyPlatformClass()
       await loadAppVersion()
       
       // 生成当前屏幕配置标识

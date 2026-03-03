@@ -195,6 +195,41 @@ body {
   }
 }
 
+// macOS 固定模式：覆盖为透明背景，配合原生 Vibrancy 效果
+body.platform-macos.fixed-mode {
+  --bg-primary: transparent;
+  --bg-secondary: transparent;
+  --bg-tertiary: rgba(255, 255, 255, 0.12);
+  background: transparent !important;
+}
+
+body.platform-macos.fixed-mode #app,
+body.platform-macos.fixed-mode #app .app-container,
+body.platform-macos.fixed-mode #app .app-container .title-bar,
+body.platform-macos.fixed-mode #app .app-container .main-content,
+body.platform-macos.fixed-mode #app .app-container .quick-add,
+body.platform-macos.fixed-mode #app .app-container .right-panel {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+body.platform-macos.fixed-mode #app .app-container .quick-add {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border: 1px solid rgba(255, 255, 255, 0.22) !important;
+}
+
+body.platform-macos.fixed-mode #app .app-container .todo-item {
+  background: transparent !important;
+}
+
+body.platform-macos.fixed-mode #app .app-container .todo-item:hover {
+  background: rgba(255, 255, 255, 0.12) !important;
+}
+
+body.platform-macos.fixed-mode #app .app-container .empty-state {
+  background: transparent !important;
+}
+
 // 标题栏样式
 .title-bar {
   display: flex;

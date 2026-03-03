@@ -7,6 +7,11 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{Manager, State, WebviewWindow, Window};
 
+#[cfg(target_os = "macos")]
+use window_vibrancy::{
+    apply_vibrancy, clear_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
+};
+
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::{HWND, POINT};
 #[cfg(target_os = "windows")]
@@ -661,7 +666,21 @@ pub fn set_window_fixed_mode(
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        if fixed {
+            let _ = apply_vibrancy(
+                &window,
+                NSVisualEffectMaterial::HudWindow,
+                Some(NSVisualEffectState::FollowsWindowActiveState),
+                Some(10.0),
+            );
+        } else {
+            let _ = clear_vibrancy(&window);
+        }
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = (window, fixed);
     }

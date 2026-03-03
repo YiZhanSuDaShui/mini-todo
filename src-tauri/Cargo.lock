@@ -2161,6 +2161,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tokio",
  "urlencoding",
+ "window-vibrancy",
  "windows 0.58.0",
 ]
 

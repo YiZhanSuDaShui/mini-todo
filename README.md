@@ -4,10 +4,7 @@
 
 ![列表模式](docs/images/list.png)
 ![四象限模式](docs/images/grid.png)
-
 ![添加/编辑模式](docs/images/add.png)
-
-
 
 ## 功能特性
 
@@ -41,6 +38,10 @@
 - 版本更新检查
 - 数据导入/导出
 
+### 补充
+- 因为我没有MacOS和Linux桌面，所以大概率上会存在效果偏差
+- 如有相关电脑也愿意进行维护的，欢迎提交PR
+
 ## 安装
 
 前往 [Releases](https://github.com/dreamlonglll/mini-todo/releases) 页面下载最新版本。
@@ -48,6 +49,7 @@
 ### Windows
 - 下载 `.msi` 或 `.exe` 安装包
 - 运行安装程序完成安装
+  
 
 ## 开发
 

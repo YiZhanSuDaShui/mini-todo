@@ -303,20 +303,26 @@ async function openSettings() {
   try {
     isModalOpen.value = true
     
-    // 获取主窗口位置、大小和缩放因子
-    const mainPos = await appWindow.outerPosition()
-    const mainSize = await appWindow.outerSize()
-    const scaleFactor = await appWindow.scaleFactor()
     const settingsWidth = 480
     const settingsHeight = 720
+    let x: number, y: number
     
-    // 计算弹窗位置：主窗口正中间（考虑 DPI 缩放）
-    const mainX = mainPos.x / scaleFactor
-    const mainY = mainPos.y / scaleFactor
-    const mainW = mainSize.width / scaleFactor
-    const mainH = mainSize.height / scaleFactor
-    const x = Math.round(mainX + (mainW - settingsWidth) / 2)
-    const y = Math.round(mainY + (mainH - settingsHeight) / 2)
+    const monitor = await currentMonitor() || await primaryMonitor()
+    if (monitor) {
+      const s = monitor.scaleFactor
+      const mx = monitor.position.x / s
+      const my = monitor.position.y / s
+      const mw = monitor.size.width / s
+      const mh = monitor.size.height / s
+      x = Math.round(mx + (mw - settingsWidth) / 2)
+      y = Math.round(my + (mh - settingsHeight) / 2)
+    } else {
+      const scaleFactor = await appWindow.scaleFactor()
+      const mainPos = await appWindow.outerPosition()
+      const mainSize = await appWindow.outerSize()
+      x = Math.round(mainPos.x / scaleFactor + (mainSize.width / scaleFactor - settingsWidth) / 2)
+      y = Math.round(mainPos.y / scaleFactor + (mainSize.height / scaleFactor - settingsHeight) / 2)
+    }
     
     const webview = new WebviewWindow(label, {
       url: '#/settings',

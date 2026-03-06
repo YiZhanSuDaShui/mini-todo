@@ -9,6 +9,7 @@ const props = defineProps<{
   showCalendarControls?: boolean
   currentMonthText?: string
   completedCount?: number
+  syncing?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -17,6 +18,7 @@ const emit = defineEmits<{
   (e: 'calendar-prev'): void
   (e: 'calendar-next'): void
   (e: 'calendar-today'): void
+  (e: 'sync'): void
 }>()
 
 const appStore = useAppStore()
@@ -164,6 +166,17 @@ async function handleVersionClick() {
           <Lock v-if="isFixed" />
           <Unlock v-else />
         </el-icon>
+      </button>
+
+      <!-- 同步按钮 -->
+      <button 
+        class="title-btn"
+        :class="{ syncing: props.syncing }"
+        :title="props.syncing ? '同步中...' : '同步数据'"
+        :disabled="props.syncing"
+        @click="emit('sync')"
+      >
+        <el-icon :size="16"><Refresh /></el-icon>
       </button>
 
       <!-- 设置按钮 -->
@@ -317,4 +330,15 @@ async function handleVersionClick() {
   }
 }
 
+/* 同步按钮旋转动画 */
+.title-btn.syncing {
+  .el-icon {
+    animation: spin 1s linear infinite;
+  }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
 </style>

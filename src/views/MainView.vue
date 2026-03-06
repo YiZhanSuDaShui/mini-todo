@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, computed, ref } from 'vue'
 import dayjs from 'dayjs'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useTodoStore, useAppStore } from '@/stores'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { getCurrentWindow, primaryMonitor, currentMonitor } from '@tauri-apps/api/window'
@@ -11,7 +11,7 @@ import TitleBar from '@/components/TitleBar.vue'
 import TodoList from '@/components/TodoList.vue'
 import QuadrantView from '@/components/QuadrantView.vue'
 import CalendarView from '@/components/CalendarView.vue'
-import type { Todo, SyncSettings } from '@/types'
+import type { Todo, SyncSettings, SyncDownloadResult } from '@/types'
 
 const todoStore = useTodoStore()
 const appStore = useAppStore()
@@ -19,6 +19,9 @@ const appWindow = getCurrentWindow()
 
 // 已完成弹窗显示状态
 const showCompletedDialog = ref(false)
+
+// 同步状态
+const isSyncing = ref(false)
 
 // 是否显示日历
 const showCalendar = computed(() => appStore.showCalendar)
@@ -351,6 +354,70 @@ async function openSettings() {
   }
 }
 
+async function handleSync() {
+  if (isSyncing.value) return
+  try {
+    isSyncing.value = true
+    const settings = await invoke<SyncSettings>('get_sync_settings')
+    if (!settings.webdavUrl) {
+      ElMessage.warning('请先在设置中配置 WebDAV 服务器')
+      return
+    }
+
+    const result = await invoke<SyncDownloadResult>('webdav_download_sync')
+
+    if (result.hasRemote && result.hasConflict) {
+      try {
+        const action = await ElMessageBox.confirm(
+          `本地和云端数据均有更新，请选择操作：`,
+          '同步冲突',
+          {
+            confirmButtonText: '使用云端数据',
+            cancelButtonText: '保留本地数据',
+            distinguishCancelAndClose: true,
+            type: 'warning',
+          }
+        )
+        if (action === 'confirm' && result.remoteData) {
+          await invoke<string>('webdav_apply_remote', {
+            syncDataJson: JSON.stringify(result.remoteData),
+          })
+          await todoStore.fetchTodos()
+          ElMessage.success('已同步云端数据到本地')
+        } else {
+          await invoke<string>('webdav_upload_sync')
+          ElMessage.success('已上传本地数据到云端')
+        }
+      } catch (e) {
+        if (e === 'cancel') {
+          await invoke<string>('webdav_upload_sync')
+          ElMessage.success('已上传本地数据到云端')
+        }
+      }
+    } else if (result.hasRemote && result.remoteData) {
+      const remoteIsNewer = result.remoteUpdatedAt && result.localUpdatedAt
+        ? result.remoteUpdatedAt > result.localUpdatedAt
+        : !!result.remoteUpdatedAt
+
+      if (remoteIsNewer) {
+        await invoke<string>('webdav_apply_remote', {
+          syncDataJson: JSON.stringify(result.remoteData),
+        })
+        await todoStore.fetchTodos()
+      }
+      await invoke<string>('webdav_upload_sync')
+      ElMessage.success('同步完成')
+    } else {
+      await invoke<string>('webdav_upload_sync')
+      ElMessage.success('数据已上传到云端')
+    }
+  } catch (e) {
+    ElMessage.error('同步失败: ' + String(e))
+  } finally {
+    isSyncing.value = false
+  }
+}
+
 async function startAutoSync() {
   stopAutoSync()
   try {
@@ -397,11 +464,13 @@ function stopAutoSync() {
       :show-calendar-controls="showCalendar"
       :current-month-text="calendarMonthText"
       :completed-count="completedCount"
+      :syncing="isSyncing"
       @open-settings="openSettings"
       @open-completed="showCompletedDialog = true"
       @calendar-prev="handleCalendarPrev"
       @calendar-next="handleCalendarNext"
       @calendar-today="handleCalendarToday"
+      @sync="handleSync"
     />
 
     <!-- 主内容区 - 分栏布局 -->

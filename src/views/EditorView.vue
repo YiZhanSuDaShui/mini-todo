@@ -818,22 +818,22 @@ function handleClose() {
                 >
                   {{ subtask.title }}
                 </span>
-                <button 
-                  v-if="editingSubtaskId !== subtask.id"
-                  class="edit-btn"
-                  @click="startEditSubtask(subtask)"
-                  title="编辑子任务"
-                >
-                  <el-icon><Edit /></el-icon>
-                </button>
-                <button 
-                  v-if="editingSubtaskId !== subtask.id"
-                  class="delete-btn"
-                  @click="deleteSubtask(subtask.id)"
-                  title="删除子任务"
-                >
-                  <el-icon><Delete /></el-icon>
-                </button>
+                <div v-if="editingSubtaskId !== subtask.id" class="subtask-actions">
+                  <button 
+                    class="action-btn edit-btn"
+                    @click="startEditSubtask(subtask)"
+                    title="编辑子任务"
+                  >
+                    <el-icon><Edit /></el-icon>
+                  </button>
+                  <button 
+                    class="action-btn delete-btn"
+                    @click="deleteSubtask(subtask.id)"
+                    title="删除子任务"
+                  >
+                    <el-icon><Delete /></el-icon>
+                  </button>
+                </div>
               </div>
             </transition-group>
           </div>
@@ -1148,6 +1148,7 @@ function handleClose() {
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   transition: all 0.2s ease;
+  position: relative;
 
   &:last-child {
     margin-bottom: 0;
@@ -1157,9 +1158,8 @@ function handleClose() {
     border-color: #cbd5e1;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.04);
 
-    .edit-btn,
-    .delete-btn {
-      opacity: 1;
+    .subtask-actions {
+      display: flex;
     }
   }
 
@@ -1231,41 +1231,43 @@ function handleClose() {
     min-width: 0;
   }
 
-  .edit-btn {
-    padding: 4px;
-    background: transparent;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    opacity: 0;
-    transition: all 0.15s ease;
-    color: #94a3b8;
-    display: flex;
+  .subtask-actions {
+    display: none;
     align-items: center;
-    justify-content: center;
-
-    &:hover {
-      background: #dbeafe;
-      color: #3b82f6;
-    }
-  }
-
-  .delete-btn {
-    padding: 4px;
-    background: transparent;
-    border: none;
+    gap: 2px;
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: rgba(255, 255, 255, 0.95);
+    padding: 2px 4px;
     border-radius: 4px;
-    cursor: pointer;
-    opacity: 0;
-    transition: all 0.15s ease;
-    color: #94a3b8;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+    z-index: 5;
 
-    &:hover {
-      background: #fee2e2;
-      color: #ef4444;
+    .action-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      background: transparent;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      color: #94a3b8;
+      transition: all 0.15s ease;
+
+      &.edit-btn:hover {
+        background: #dbeafe;
+        color: #3b82f6;
+      }
+
+      &.delete-btn:hover {
+        background: #fee2e2;
+        color: #ef4444;
+      }
     }
   }
 }

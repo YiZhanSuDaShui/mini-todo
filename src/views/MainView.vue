@@ -11,7 +11,7 @@ import TitleBar from '@/components/TitleBar.vue'
 import TodoList from '@/components/TodoList.vue'
 import QuadrantView from '@/components/QuadrantView.vue'
 import CalendarView from '@/components/CalendarView.vue'
-import type { Todo } from '@/types'
+import type { Todo, SyncSettings } from '@/types'
 
 const todoStore = useTodoStore()
 const appStore = useAppStore()
@@ -86,6 +86,10 @@ let unlistenTrayAddTodo: (() => void) | null = null
 let unlistenTrayOpenSettings: (() => void) | null = null
 let unlistenDataImported: (() => void) | null = null
 let unlistenFocus: (() => void) | null = null
+let unlistenSyncCompleted: (() => void) | null = null
+
+// 自动同步定时器
+let autoSyncTimer: ReturnType<typeof setInterval> | null = null
 
 // 防抖保存定时器
 const saveDebounceTimer = ref<number | null>(null)
@@ -184,6 +188,14 @@ onMounted(async () => {
     }
   })
 
+  // 监听同步完成事件
+  unlistenSyncCompleted = await listen('sync-completed', async () => {
+    await todoStore.fetchTodos()
+  })
+
+  // 初始化自动同步
+  startAutoSync()
+
   // 初始化鼠标在窗口内状态（用于 macOS 自动隐藏唤起）
   void reportAutoHideCursorInside(true)
 })
@@ -199,6 +211,8 @@ onUnmounted(() => {
   if (unlistenTrayOpenSettings) unlistenTrayOpenSettings()
   if (unlistenDataImported) unlistenDataImported()
   if (unlistenFocus) unlistenFocus()
+  if (unlistenSyncCompleted) unlistenSyncCompleted()
+  stopAutoSync()
   if (saveDebounceTimer.value) {
     clearTimeout(saveDebounceTimer.value)
   }
@@ -291,7 +305,7 @@ async function openSettings() {
     const mainSize = await appWindow.outerSize()
     const scaleFactor = await appWindow.scaleFactor()
     const settingsWidth = 480
-    const settingsHeight = 560
+    const settingsHeight = 720
     
     // 计算弹窗位置：主窗口正中间（考虑 DPI 缩放）
     const mainX = mainPos.x / scaleFactor
@@ -334,6 +348,33 @@ async function openSettings() {
     isModalOpen.value = false
     activeModalWindow = null
     console.error('Failed to open settings window:', e)
+  }
+}
+
+async function startAutoSync() {
+  stopAutoSync()
+  try {
+    const settings = await invoke<SyncSettings>('get_sync_settings')
+    if (settings.autoSync && settings.webdavUrl) {
+      const intervalMs = (settings.syncInterval || 15) * 60 * 1000
+      autoSyncTimer = setInterval(async () => {
+        try {
+          await invoke<string>('webdav_upload_sync')
+          console.log('Auto sync completed')
+        } catch (e) {
+          console.warn('Auto sync failed:', e)
+        }
+      }, intervalMs)
+    }
+  } catch (e) {
+    console.warn('Failed to init auto sync:', e)
+  }
+}
+
+function stopAutoSync() {
+  if (autoSyncTimer) {
+    clearInterval(autoSyncTimer)
+    autoSyncTimer = null
   }
 }
 </script>

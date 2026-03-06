@@ -16,7 +16,6 @@ static LAST_CLICK_TIME: AtomicU64 = AtomicU64::new(0);
 const DOUBLE_CLICK_THRESHOLD_MS: u64 = 500;
 use commands::{
     close_all_notification_windows,
-    // 通知窗口命令
     close_notification_window,
     create_subtask,
     create_todo,
@@ -26,13 +25,10 @@ use commands::{
     export_data,
     get_images_dir,
     get_subtask,
-    // 节假日命令
+    get_sync_settings,
     fetch_holidays,
-    // 日历设置命令
     get_auto_hide_enabled,
-    // 通知设置命令
     get_notification_type,
-    // 屏幕配置命令
     get_screen_config,
     get_settings,
     get_show_calendar,
@@ -46,6 +42,7 @@ use commands::{
     save_screen_config,
     save_settings,
     save_subtask_image,
+    save_sync_settings,
     set_auto_hide_cursor_inside,
     set_auto_hide_enabled,
     set_notification_type,
@@ -54,6 +51,10 @@ use commands::{
     update_screen_config_name,
     update_subtask,
     update_todo,
+    webdav_apply_remote,
+    webdav_download_sync,
+    webdav_test_connection,
+    webdav_upload_sync,
 };
 
 #[cfg(target_os = "windows")]
@@ -304,6 +305,13 @@ pub fn run() {
             // 通知窗口命令
             close_notification_window,
             close_all_notification_windows,
+            // WebDAV 同步命令
+            get_sync_settings,
+            save_sync_settings,
+            webdav_test_connection,
+            webdav_upload_sync,
+            webdav_download_sync,
+            webdav_apply_remote,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { emit } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -9,7 +9,7 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAppStore, APP_VERSION } from '@/stores'
-import type { ScreenConfig } from '@/types'
+import type { ScreenConfig, SyncSettings, SyncDownloadResult } from '@/types'
 
 const appWindow = getCurrentWindow()
 const appStore = useAppStore()
@@ -60,6 +60,9 @@ onMounted(async () => {
   await appStore.loadShowCalendar()
   // 加载贴边自动隐藏状态
   await appStore.loadAutoHideEnabled()
+  
+  // 加载 WebDAV 同步设置
+  await loadSyncSettings()
 })
 
 // 删除屏幕配置
@@ -227,6 +230,159 @@ function handleClose() {
   appWindow.close()
 }
 
+// ========== WebDAV 同步 ==========
+const syncSettings = reactive<SyncSettings>({
+  webdavUrl: '',
+  webdavUsername: '',
+  webdavPassword: '',
+  autoSync: false,
+  syncInterval: 15,
+  lastSyncAt: null,
+  deviceId: '',
+})
+const showPassword = ref(false)
+const testingConnection = ref(false)
+const syncing = ref(false)
+const syncStatus = ref<'idle' | 'uploading' | 'downloading'>('idle')
+
+const syncIntervalOptions = [
+  { label: '5 分钟', value: 5 },
+  { label: '10 分钟', value: 10 },
+  { label: '15 分钟', value: 15 },
+  { label: '30 分钟', value: 30 },
+  { label: '60 分钟', value: 60 },
+]
+
+async function loadSyncSettings() {
+  try {
+    const settings = await invoke<SyncSettings>('get_sync_settings')
+    Object.assign(syncSettings, settings)
+  } catch (e) {
+    console.error('Failed to load sync settings:', e)
+  }
+}
+
+async function saveSyncSettings() {
+  try {
+    await invoke('save_sync_settings', { settings: syncSettings })
+    ElMessage.success('同步设置已保存')
+  } catch (e) {
+    console.error('Failed to save sync settings:', e)
+    ElMessage.error('保存失败: ' + String(e))
+  }
+}
+
+async function testConnection() {
+  if (!syncSettings.webdavUrl) {
+    ElMessage.warning('请输入 WebDAV 服务器地址')
+    return
+  }
+  try {
+    testingConnection.value = true
+    await invoke<boolean>('webdav_test_connection', {
+      url: syncSettings.webdavUrl,
+      username: syncSettings.webdavUsername,
+      password: syncSettings.webdavPassword,
+    })
+    ElMessage.success('连接成功')
+  } catch (e) {
+    ElMessage.error('连接失败: ' + String(e))
+  } finally {
+    testingConnection.value = false
+  }
+}
+
+async function handleUploadSync() {
+  if (!syncSettings.webdavUrl) {
+    ElMessage.warning('请先配置 WebDAV 服务器')
+    return
+  }
+  try {
+    syncing.value = true
+    syncStatus.value = 'uploading'
+    const lastSyncAt = await invoke<string>('webdav_upload_sync')
+    syncSettings.lastSyncAt = lastSyncAt
+    ElMessage.success('数据已上传到云端')
+    await emit('sync-completed')
+  } catch (e) {
+    ElMessage.error('上传失败: ' + String(e))
+  } finally {
+    syncing.value = false
+    syncStatus.value = 'idle'
+  }
+}
+
+async function handleDownloadSync() {
+  if (!syncSettings.webdavUrl) {
+    ElMessage.warning('请先配置 WebDAV 服务器')
+    return
+  }
+  try {
+    syncing.value = true
+    syncStatus.value = 'downloading'
+    const result = await invoke<SyncDownloadResult>('webdav_download_sync')
+
+    if (!result.hasRemote) {
+      ElMessage.info('云端暂无同步数据')
+      return
+    }
+
+    if (result.hasConflict) {
+      try {
+        const action = await ElMessageBox.confirm(
+          `本地数据（${formatTime(result.localUpdatedAt)}）和云端数据（${formatTime(result.remoteUpdatedAt)}）均有更新，请选择操作：`,
+          '同步冲突',
+          {
+            confirmButtonText: '使用云端数据',
+            cancelButtonText: '保留本地数据',
+            distinguishCancelAndClose: true,
+            type: 'warning',
+          }
+        )
+        if (action === 'confirm') {
+          await applyRemoteData(result)
+        } else {
+          await handleUploadSync()
+        }
+      } catch (e) {
+        if (e === 'cancel') {
+          await handleUploadSync()
+        }
+      }
+    } else {
+      await applyRemoteData(result)
+    }
+  } catch (e) {
+    ElMessage.error('下载失败: ' + String(e))
+  } finally {
+    syncing.value = false
+    syncStatus.value = 'idle'
+  }
+}
+
+async function applyRemoteData(result: SyncDownloadResult) {
+  if (!result.remoteData) return
+  try {
+    const lastSyncAt = await invoke<string>('webdav_apply_remote', {
+      syncDataJson: JSON.stringify(result.remoteData),
+    })
+    syncSettings.lastSyncAt = lastSyncAt
+    ElMessage.success('已同步云端数据到本地')
+    await emit('data-imported')
+  } catch (e) {
+    ElMessage.error('应用远程数据失败: ' + String(e))
+  }
+}
+
+function formatTime(time: string | null | undefined): string {
+  if (!time) return '未知'
+  try {
+    return new Date(time).toLocaleString('zh-CN')
+  } catch {
+    return time
+  }
+}
+
 // 检查更新
 async function handleCheckUpdate() {
   try {
@@ -381,6 +537,133 @@ async function handleCheckUpdate() {
           <p class="card-hint">
             <el-icon :size="14"><InfoFilled /></el-icon>
             导出数据可用于备份或迁移到其他设备
+          </p>
+        </div>
+      </div>
+
+      <!-- WebDAV 云同步 -->
+      <div class="settings-card">
+        <div class="card-header">
+          <el-icon class="card-icon"><Connection /></el-icon>
+          <h3 class="card-title">云同步 (WebDAV)</h3>
+          <span v-if="syncSettings.lastSyncAt" class="last-sync-time">
+            上次同步: {{ formatTime(syncSettings.lastSyncAt) }}
+          </span>
+        </div>
+        
+        <div class="card-body">
+          <div class="sync-form">
+            <div class="form-item">
+              <label class="form-label">服务器地址</label>
+              <el-input
+                v-model="syncSettings.webdavUrl"
+                placeholder="https://dav.example.com/dav"
+                size="small"
+                clearable
+              />
+            </div>
+            
+            <div class="form-row">
+              <div class="form-item flex-1">
+                <label class="form-label">用户名</label>
+                <el-input
+                  v-model="syncSettings.webdavUsername"
+                  placeholder="用户名"
+                  size="small"
+                />
+              </div>
+              <div class="form-item flex-1">
+                <label class="form-label">密码</label>
+                <el-input
+                  v-model="syncSettings.webdavPassword"
+                  :type="showPassword ? 'text' : 'password'"
+                  placeholder="密码"
+                  size="small"
+                >
+                  <template #suffix>
+                    <el-icon class="password-toggle" @click="showPassword = !showPassword">
+                      <View v-if="showPassword" />
+                      <Hide v-else />
+                    </el-icon>
+                  </template>
+                </el-input>
+              </div>
+            </div>
+            
+            <div class="form-actions">
+              <button 
+                class="data-btn" 
+                :disabled="testingConnection"
+                @click="testConnection"
+              >
+                <el-icon><Connection /></el-icon>
+                <span>{{ testingConnection ? '测试中...' : '测试连接' }}</span>
+              </button>
+              <button class="data-btn primary" @click="saveSyncSettings">
+                <el-icon><Check /></el-icon>
+                <span>保存配置</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="sync-divider"></div>
+
+          <div class="settings-row">
+            <div class="row-left">
+              <el-icon class="row-icon"><Timer /></el-icon>
+              <div class="row-content">
+                <span class="settings-label">自动同步</span>
+                <span class="settings-desc">定时自动将数据同步到云端</span>
+              </div>
+            </div>
+            <el-switch
+              v-model="syncSettings.autoSync"
+              @change="saveSyncSettings"
+            />
+          </div>
+          
+          <div v-if="syncSettings.autoSync" class="settings-row">
+            <div class="row-left">
+              <el-icon class="row-icon"><Clock /></el-icon>
+              <span class="settings-label">同步间隔</span>
+            </div>
+            <el-select
+              v-model="syncSettings.syncInterval"
+              size="small"
+              style="width: 120px"
+              @change="saveSyncSettings"
+            >
+              <el-option
+                v-for="opt in syncIntervalOptions"
+                :key="opt.value"
+                :label="opt.label"
+                :value="opt.value"
+              />
+            </el-select>
+          </div>
+
+          <div class="sync-actions">
+            <button 
+              class="data-btn primary"
+              :disabled="syncing || !syncSettings.webdavUrl"
+              @click="handleUploadSync"
+            >
+              <el-icon><Upload /></el-icon>
+              <span>{{ syncStatus === 'uploading' ? '上传中...' : '上传到云端' }}</span>
+            </button>
+            <button 
+              class="data-btn"
+              :disabled="syncing || !syncSettings.webdavUrl"
+              @click="handleDownloadSync"
+            >
+              <el-icon><Download /></el-icon>
+              <span>{{ syncStatus === 'downloading' ? '下载中...' : '从云端下载' }}</span>
+            </button>
+          </div>
+
+          <p class="card-hint">
+            <el-icon :size="14"><InfoFilled /></el-icon>
+            通过 WebDAV 协议将待办数据和图片同步到云端存储
           </p>
         </div>
       </div>
@@ -839,5 +1122,69 @@ async function handleCheckUpdate() {
   .el-icon {
     font-size: 16px;
   }
+}
+
+/* WebDAV 同步样式 */
+.last-sync-time {
+  margin-left: auto;
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 400;
+}
+
+.sync-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.form-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.form-label {
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.form-row {
+  display: flex;
+  gap: 12px;
+}
+
+.flex-1 {
+  flex: 1;
+}
+
+.form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.password-toggle {
+  cursor: pointer;
+  color: #94a3b8;
+  transition: color 0.2s;
+
+  &:hover {
+    color: #64748b;
+  }
+}
+
+.sync-divider {
+  height: 1px;
+  background: #f1f5f9;
+  margin: 16px 0;
+}
+
+.sync-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+  margin-bottom: 12px;
 }
 </style>

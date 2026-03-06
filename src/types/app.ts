@@ -66,3 +66,33 @@ export interface MonitorInfo {
   height: number
   scaleFactor: number
 }
+
+// WebDAV 同步设置
+export interface SyncSettings {
+  webdavUrl: string
+  webdavUsername: string
+  webdavPassword: string
+  autoSync: boolean
+  syncInterval: number
+  lastSyncAt: string | null
+  deviceId: string
+}
+
+// 同步数据结构
+export interface SyncData {
+  version: string
+  deviceId: string
+  updatedAt: string
+  todos: unknown[]
+  settings: unknown
+  images: string[]
+}
+
+// 同步下载结果
+export interface SyncDownloadResult {
+  hasRemote: boolean
+  remoteData: SyncData | null
+  localUpdatedAt: string | null
+  remoteUpdatedAt: string | null
+  hasConflict: boolean
+}

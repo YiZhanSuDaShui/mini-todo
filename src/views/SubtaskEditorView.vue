@@ -23,6 +23,34 @@ const markdownContent = ref('')
 const editorContainer = ref<HTMLDivElement | null>(null)
 let editorInstance: Editor | null = null
 
+// 图片预览
+const previewVisible = ref(false)
+const previewUrls = ref<string[]>([])
+const previewInitialIndex = ref(0)
+
+function handleImageClick(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  if (target.tagName !== 'IMG') return
+
+  const imgSrc = (target as HTMLImageElement).src
+  if (!imgSrc) return
+
+  e.preventDefault()
+  e.stopPropagation()
+
+  const container = editorContainer.value
+  if (!container) return
+
+  const allImages = Array.from(container.querySelectorAll('.ProseMirror img'))
+  const urls = allImages.map(img => (img as HTMLImageElement).src).filter(Boolean)
+
+  if (urls.length === 0) return
+
+  previewUrls.value = urls
+  previewInitialIndex.value = Math.max(0, urls.indexOf(imgSrc))
+  previewVisible.value = true
+}
+
 async function imageUploader(files: FileList, schema: any): Promise<Node[]> {
   const images: File[] = []
   for (let i = 0; i < files.length; i++) {
@@ -136,9 +164,11 @@ onMounted(async () => {
   await loadSubtask()
   await nextTick()
   await initEditor()
+  editorContainer.value?.addEventListener('click', handleImageClick)
 })
 
 onBeforeUnmount(() => {
+  editorContainer.value?.removeEventListener('click', handleImageClick)
   destroyEditor()
 })
 </script>
@@ -183,6 +213,15 @@ onBeforeUnmount(() => {
         保存
       </el-button>
     </div>
+
+    <!-- 图片预览 -->
+    <el-image-viewer
+      v-if="previewVisible"
+      :url-list="previewUrls"
+      :initial-index="previewInitialIndex"
+      :z-index="10000"
+      @close="previewVisible = false"
+    />
   </div>
 </template>
 
@@ -317,6 +356,13 @@ onBeforeUnmount(() => {
   height: auto;
   border-radius: 6px;
   margin: 8px 0;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+
+  &:hover {
+    opacity: 0.85;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  }
 }
 
 .milkdown-editor-wrapper :deep(.ProseMirror code) {

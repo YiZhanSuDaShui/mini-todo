@@ -1,12 +1,16 @@
 use crate::db::Database;
 use crate::services::webdav::WebDavClient;
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use serde::{Deserialize, Serialize};
+use std::io::{Read as _, Write as _};
 use std::path::PathBuf;
 use tauri::State;
 use super::data::{export_data_internal, import_data_raw};
 
 const REMOTE_DIR: &str = "/mini-todo";
-const SYNC_DATA_FILE: &str = "/mini-todo/sync-data.json";
+const SYNC_DATA_FILE: &str = "/mini-todo/sync-data.json.gz";
 const REMOTE_IMAGES_DIR: &str = "/mini-todo/images";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,10 +182,11 @@ pub fn webdav_upload_sync(db: State<Database>) -> Result<String, String> {
         images: image_files.clone(),
     };
 
-    let sync_json = serde_json::to_string_pretty(&sync_data).map_err(|e| e.to_string())?;
+    let sync_json = serde_json::to_string(&sync_data).map_err(|e| e.to_string())?;
 
-    // Upload sync data
-    client.upload_text(SYNC_DATA_FILE, &sync_json)?;
+    // Compress and upload sync data
+    let compressed = gzip_compress(sync_json.as_bytes())?;
+    client.upload_bytes(SYNC_DATA_FILE, &compressed, "application/gzip")?;
 
     // Upload images
     for img_name in &image_files {
@@ -225,10 +230,10 @@ pub fn webdav_download_sync(db: State<Database>) -> Result<SyncDownloadResult, S
         &sync_settings.webdav_password,
     );
 
-    // Download sync data
-    let remote_text = client.download_text(SYNC_DATA_FILE)?;
+    // Download and decompress sync data
+    let remote_bytes = client.download_bytes(SYNC_DATA_FILE)?;
 
-    if remote_text.is_none() {
+    if remote_bytes.is_none() {
         return Ok(SyncDownloadResult {
             has_remote: false,
             remote_data: None,
@@ -238,7 +243,8 @@ pub fn webdav_download_sync(db: State<Database>) -> Result<SyncDownloadResult, S
         });
     }
 
-    let remote_json = remote_text.unwrap();
+    let compressed = remote_bytes.unwrap();
+    let remote_json = gzip_decompress(&compressed)?;
     let remote_data: SyncData =
         serde_json::from_str(&remote_json).map_err(|e| format!("解析远程数据失败: {}", e))?;
 
@@ -348,4 +354,17 @@ fn is_remote_newer(settings: &SyncSettings, remote_updated_at: &str) -> bool {
         Some(last) => remote_updated_at > last.as_str(),
         None => true,
     }
+}
+
+fn gzip_compress(data: &[u8]) -> Result<Vec<u8>, String> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(data).map_err(|e| format!("压缩失败: {}", e))?;
+    encoder.finish().map_err(|e| format!("压缩完成失败: {}", e))
+}
+
+fn gzip_decompress(data: &[u8]) -> Result<String, String> {
+    let mut decoder = GzDecoder::new(data);
+    let mut result = String::new();
+    decoder.read_to_string(&mut result).map_err(|e| format!("解压失败: {}", e))?;
+    Ok(result)
 }

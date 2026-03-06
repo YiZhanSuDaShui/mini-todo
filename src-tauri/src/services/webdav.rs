@@ -147,6 +147,28 @@ impl WebDavClient {
         Ok(Some(text))
     }
 
+    pub fn download_bytes(&self, remote_path: &str) -> Result<Option<Vec<u8>>, String> {
+        let url = self.full_url(remote_path);
+
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth(&self.username, Some(&self.password))
+            .send()
+            .map_err(|e| format!("下载失败: {}", e))?;
+
+        let status = resp.status().as_u16();
+        if status == 404 {
+            return Ok(None);
+        }
+        if status != 200 {
+            return Err(format!("下载失败，状态码: {}", status));
+        }
+
+        let bytes = resp.bytes().map_err(|e| format!("读取响应失败: {}", e))?;
+        Ok(Some(bytes.to_vec()))
+    }
+
     pub fn download_file(&self, remote_path: &str, local_path: &Path) -> Result<bool, String> {
         let url = self.full_url(remote_path);
 

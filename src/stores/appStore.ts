@@ -307,6 +307,7 @@ export const useAppStore = defineStore('app', () => {
       const settings = await invoke<{ textTheme: string }>('get_settings')
       isDarkTheme.value = settings.textTheme === 'light'
       applyThemeClass()
+      await applyMacosVibrancy()
     } catch (e) {
       console.error('Failed to load dark theme setting:', e)
       isDarkTheme.value = false
@@ -317,12 +318,22 @@ export const useAppStore = defineStore('app', () => {
   async function toggleDarkTheme() {
     isDarkTheme.value = !isDarkTheme.value
     applyThemeClass()
+    await applyMacosVibrancy()
     await saveWindowState()
   }
 
   // 应用主题 CSS class
   function applyThemeClass() {
     document.body.classList.toggle('dark-theme', isDarkTheme.value)
+  }
+
+  // macOS vibrancy 控制
+  async function applyMacosVibrancy() {
+    try {
+      await invoke('set_macos_vibrancy', { enabled: isDarkTheme.value })
+    } catch {
+      // 非 macOS 平台忽略
+    }
   }
 
   // 保存窗口状态（位置和尺寸）到当前屏幕配置

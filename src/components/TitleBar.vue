@@ -194,6 +194,11 @@ async function handleVersionClick() {
 </template>
 
 <style scoped>
+/* 标题栏默认可拖拽 */
+.title-bar {
+  -webkit-app-region: drag;
+}
+
 /* 固定模式下禁用拖拽 */
 .title-bar.no-drag {
   -webkit-app-region: no-drag !important;

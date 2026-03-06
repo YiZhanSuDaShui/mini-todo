@@ -706,6 +706,30 @@ pub fn set_window_fixed_mode(
 }
 
 #[tauri::command]
+pub fn set_macos_vibrancy(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(window) = app.get_webview_window("main") {
+            if enabled {
+                let _ = apply_vibrancy(
+                    &window,
+                    NSVisualEffectMaterial::HudWindow,
+                    Some(NSVisualEffectState::FollowsWindowActiveState),
+                    Some(10.0),
+                );
+            } else {
+                let _ = clear_vibrancy(&window);
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, enabled);
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn set_auto_hide_cursor_inside(inside: bool) -> Result<(), String> {
     with_auto_hide_state(|state| {
         state.cursor_inside_window = inside;

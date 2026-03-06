@@ -45,6 +45,7 @@ use commands::{
     save_sync_settings,
     set_auto_hide_cursor_inside,
     set_auto_hide_enabled,
+    set_macos_vibrancy,
     set_notification_type,
     set_show_calendar,
     set_window_fixed_mode,
@@ -284,6 +285,7 @@ pub fn run() {
             get_auto_hide_enabled,
             set_auto_hide_enabled,
             set_auto_hide_cursor_inside,
+            set_macos_vibrancy,
             get_window_persist_state,
             reset_window,
             // 屏幕配置命令

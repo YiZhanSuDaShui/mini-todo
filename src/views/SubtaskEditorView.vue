@@ -364,12 +364,12 @@ onBeforeUnmount(() => {
     <el-dialog
       v-model="agentDialogVisible"
       title="Agent 执行"
-      width="560px"
+      width="80%"
       append-to-body
       class="agent-exec-dialog"
-      top="5vh"
+      top="10vh"
     >
-      <div style="max-height: 65vh; overflow-y: auto; padding-right: 4px;">
+      <div class="agent-dialog-body" style="max-height: calc(80vh - 160px); overflow-y: auto;">
         <el-form label-position="top" size="default">
           <el-form-item label="Agent">
             <el-input :model-value="currentAgentLabel" disabled />
@@ -379,7 +379,7 @@ onBeforeUnmount(() => {
             <el-input :model-value="agentForm.projectPath" disabled />
           </el-form-item>
 
-          <el-form-item required>
+          <el-form-item v-if="!currentExecution" required>
             <template #label>
               <span style="display: flex; align-items: center; gap: 6px;">
                 <span>执行指令</span>
@@ -645,10 +645,14 @@ onBeforeUnmount(() => {
 
 <style>
 .agent-exec-dialog .el-dialog__body {
-  padding-top: 12px;
+  padding: 12px 20px 0;
 }
 .agent-exec-dialog .el-dialog__footer {
-  padding-top: 12px;
+  padding: 12px 20px;
+}
+.agent-dialog-body {
+  padding-right: 4px;
+  padding-bottom: 8px;
 }
 .agent-dialog-footer {
   display: flex;

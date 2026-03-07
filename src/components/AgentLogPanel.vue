@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, nextTick, onBeforeUnmount, onMounted } from 'vue'
+import { ref, nextTick, onBeforeUnmount, onMounted, computed } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { marked } from 'marked'
 import type { AgentEvent } from '@/types/agent'
 
 const props = defineProps<{
@@ -79,6 +80,109 @@ function stopTimer() {
   }
 }
 
+const renderedMarkdown = computed(() => {
+  if (logLines.value.length === 0) return ''
+  const deduped = deduplicateLogs(logLines.value)
+  const parts = deduped.map(line => {
+    if (line.level === 'stderr') return `<span class="log-stderr">${escapeHtml(line.content)}</span>`
+    if (line.level === 'success') return `<span class="log-success">${escapeHtml(line.content)}</span>`
+    return formatCommandLines(line.content)
+  })
+  const md = mergeAdjacentCodeBlocks(parts.join('\n\n'))
+  return marked.parse(md, { breaks: true, async: false }) as string
+})
+
+function deduplicateLogs(lines: LogLine[]): LogLine[] {
+  const result: LogLine[] = []
+  for (let i = 0; i < lines.length; i++) {
+    if (i > 0
+      && lines[i].content === lines[i - 1].content
+      && lines[i].level === lines[i - 1].level
+    ) {
+      continue
+    }
+    result.push(lines[i])
+  }
+  return result
+}
+
+function mergeAdjacentCodeBlocks(text: string): string {
+  return text.replace(/```\s*```(\w*\n)?/g, '\n')
+}
+
+function formatCommandLines(text: string): string {
+  if (text.includes('```')) return text
+
+  const lines = text.split('\n')
+  const result: string[] = []
+  let cmdBlock: string[] = []
+  let patchBlock: string[] = []
+  let inPatch = false
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+
+    if (trimmed.startsWith('*** Begin Patch') || trimmed.startsWith('*** begin patch')) {
+      if (cmdBlock.length > 0) {
+        result.push('```\n' + cmdBlock.join('\n') + '\n```')
+        cmdBlock = []
+      }
+      inPatch = true
+      patchBlock = [line]
+      continue
+    }
+
+    if (inPatch) {
+      patchBlock.push(line)
+      if (trimmed.startsWith('*** End Patch') || trimmed.startsWith('*** end patch')) {
+        inPatch = false
+        continue
+      }
+      continue
+    }
+
+    if (patchBlock.length > 0) {
+      if (trimmed === "'@\"" || trimmed === "'@" || trimmed === '"@' || trimmed === "@'" || trimmed === '') {
+        patchBlock.push(line)
+        if (trimmed !== '') {
+          result.push('```\n' + patchBlock.join('\n') + '\n```')
+          patchBlock = []
+        }
+        continue
+      } else {
+        result.push('```\n' + patchBlock.join('\n') + '\n```')
+        patchBlock = []
+      }
+    }
+
+    if (trimmed.startsWith('$ ')) {
+      cmdBlock.push(trimmed)
+    } else {
+      if (cmdBlock.length > 0) {
+        result.push('```\n' + cmdBlock.join('\n') + '\n```')
+        cmdBlock = []
+      }
+      result.push(line)
+    }
+  }
+
+  if (cmdBlock.length > 0) {
+    result.push('```\n' + cmdBlock.join('\n') + '\n```')
+  }
+  if (patchBlock.length > 0) {
+    result.push('```diff\n' + patchBlock.join('\n') + '\n```')
+  }
+
+  return result.join('\n')
+}
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
 function handleScroll() {
   if (!containerRef.value) return
   const { scrollTop, scrollHeight, clientHeight } = containerRef.value
@@ -128,11 +232,10 @@ onBeforeUnmount(() => {
         等待执行...
       </div>
       <div
-        v-for="(line, i) in logLines"
-        :key="i"
-        class="log-line"
-        :class="`log-line--${line.level}`"
-      >{{ line.content }}</div>
+        v-else
+        class="log-markdown"
+        v-html="renderedMarkdown"
+      ></div>
     </div>
     <div class="status-bar">
       <span v-if="status === 'running'">
@@ -166,8 +269,6 @@ onBeforeUnmount(() => {
   font-size: 13px;
   line-height: 1.5;
   padding: 12px;
-  overflow-y: auto;
-  max-height: 300px;
   min-height: 120px;
 }
 
@@ -176,21 +277,64 @@ onBeforeUnmount(() => {
   font-style: italic;
 }
 
-.log-line {
+.log-markdown {
+  word-break: break-word;
+}
+
+.log-markdown :deep(p) {
+  margin: 4px 0;
+  line-height: 1.6;
+}
+
+.log-markdown :deep(pre) {
+  background: #2d2d2d;
+  border: 1px solid #404040;
+  border-radius: 4px;
+  padding: 8px 12px;
+  margin: 6px 0;
+  font-size: 12px;
   white-space: pre-wrap;
   word-break: break-all;
 }
 
-.log-line--stderr {
+.log-markdown :deep(code) {
+  background: #2d2d2d;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
+  color: #e6db74;
+}
+
+.log-markdown :deep(pre code) {
+  padding: 0;
+  background: transparent;
+  color: #d4d4d4;
+}
+
+.log-markdown :deep(strong) {
+  color: #6796e6;
+}
+
+.log-markdown :deep(.log-stderr) {
   color: #f48771;
 }
 
-.log-line--success {
+.log-markdown :deep(.log-success) {
   color: #89d185;
 }
 
-.log-line--info {
+.log-markdown :deep(hr) {
+  border: none;
+  border-top: 1px solid #404040;
+  margin: 8px 0;
+}
+
+.log-markdown :deep(h1),
+.log-markdown :deep(h2),
+.log-markdown :deep(h3) {
   color: #6796e6;
+  margin: 8px 0 4px;
+  font-size: 14px;
 }
 
 .status-bar {

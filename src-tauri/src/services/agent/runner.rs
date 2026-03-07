@@ -240,6 +240,30 @@ pub struct AgentOutput {
     pub duration_ms: u64,
 }
 
+/// 将文本中以 `$ ` 开头的行转换为 Markdown 代码块。
+/// 连续的命令行会合并到同一个代码块中。
+fn format_inline_commands(text: &str) -> String {
+    let mut result = Vec::new();
+    let mut cmd_block: Vec<&str> = Vec::new();
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("$ ") {
+            cmd_block.push(trimmed);
+        } else {
+            if !cmd_block.is_empty() {
+                result.push(format!("```\n{}\n```", cmd_block.join("\n")));
+                cmd_block.clear();
+            }
+            result.push(line.to_string());
+        }
+    }
+    if !cmd_block.is_empty() {
+        result.push(format!("```\n{}\n```", cmd_block.join("\n")));
+    }
+    result.join("\n")
+}
+
 /// 将 Agent CLI 输出的原始 JSON 行解析为人类可读的日志文本。
 /// 支持 Codex 和 Claude Code 两种格式。
 /// 返回 None 表示该行无需显示（如心跳/内部事件）。
@@ -255,53 +279,71 @@ fn format_agent_json(line: &str, agent_type: &str) -> Option<(String, String)> {
                     .as_str()
                     .or_else(|| item["item_type"].as_str())
                     .unwrap_or("");
+                let is_completed = event_type == "item.completed";
                 match item_type {
                     "agent_message" | "assistant_message" => {
+                        if !is_completed {
+                            return None;
+                        }
                         let text = item["text"].as_str().unwrap_or("");
                         if text.is_empty() {
                             return None;
                         }
-                        Some((text.to_string(), "stdout".to_string()))
+                        let formatted = format_inline_commands(text);
+                        Some((formatted, "stdout".to_string()))
                     }
                     "command_execution" => {
+                        if !is_completed {
+                            return None;
+                        }
                         let cmd_str = item["command"].as_str().unwrap_or("");
                         let exit = item["exit_code"].as_i64();
                         let output = item["output"].as_str().unwrap_or("");
-                        let mut parts = Vec::new();
+
+                        let mut code_lines = Vec::new();
                         if !cmd_str.is_empty() {
-                            parts.push(format!("$ {}", cmd_str));
+                            code_lines.push(format!("$ {}", cmd_str));
                         }
                         if !output.is_empty() {
-                            parts.push(output.to_string());
-                        }
-                        if let Some(code) = exit {
-                            if code != 0 {
-                                parts.push(format!("(exit code: {})", code));
+                            if output.len() > 2000 {
+                                code_lines.push(output[..2000].to_string());
+                                code_lines.push("... (truncated)".to_string());
+                            } else {
+                                code_lines.push(output.to_string());
                             }
                         }
-                        if parts.is_empty() {
+
+                        if code_lines.is_empty() {
                             return None;
                         }
-                        Some((parts.join("\n"), "stdout".to_string()))
+
+                        let mut result = format!("```\n{}\n```", code_lines.join("\n"));
+                        if let Some(code) = exit {
+                            if code != 0 {
+                                result.push_str(&format!("\n*exit code: {}*", code));
+                            }
+                        }
+                        Some((result, "stdout".to_string()))
                     }
                     "file_edit" | "file_write" => {
+                        if !is_completed {
+                            return None;
+                        }
                         let path = item["path"].as_str().unwrap_or("");
                         if path.is_empty() {
                             return None;
                         }
-                        let label = if event_type == "item.started" {
-                            "Editing"
-                        } else {
-                            "Edited"
-                        };
-                        Some((format!("[{}] {}", label, path), "info".to_string()))
+                        Some((format!("**[Edited]** `{}`", path), "info".to_string()))
                     }
                     "file_read" => {
+                        if !is_completed {
+                            return None;
+                        }
                         let path = item["path"].as_str().unwrap_or("");
                         if path.is_empty() {
                             return None;
                         }
-                        Some((format!("[Reading] {}", path), "info".to_string()))
+                        Some((format!("**[Reading]** `{}`", path), "info".to_string()))
                     }
                     _ => None,
                 }
@@ -311,7 +353,8 @@ fn format_agent_json(line: &str, agent_type: &str) -> Option<(String, String)> {
                 if text.is_empty() {
                     return None;
                 }
-                Some((text.to_string(), "stdout".to_string()))
+                let formatted = format_inline_commands(text);
+                Some((formatted, "stdout".to_string()))
             }
             "turn.completed" => {
                 let usage = &json["usage"];
@@ -369,9 +412,9 @@ fn format_agent_json(line: &str, agent_type: &str) -> Option<(String, String)> {
                     .or_else(|| input["command"].as_str())
                     .unwrap_or("");
                 if path.is_empty() {
-                    Some((format!("[Tool] {}", name), "info".to_string()))
+                    Some((format!("**[Tool]** `{}`", name), "info".to_string()))
                 } else {
-                    Some((format!("[Tool] {} {}", name, path), "info".to_string()))
+                    Some((format!("**[Tool]** `{}` `{}`", name, path), "info".to_string()))
                 }
             }
             "tool_result" => None,

@@ -12,7 +12,8 @@ pub fn get_todos(db: State<Database>) -> Result<Vec<Todo>, String> {
         // 获取所有待办
         let mut stmt = conn.prepare(
             "SELECT id, title, description, color, quadrant, notify_at, notify_before, 
-                    notified, completed, sort_order, start_time, end_time, created_at, updated_at 
+                    notified, completed, sort_order, start_time, end_time, created_at, updated_at,
+                    agent_id, agent_project_path
              FROM todos 
              ORDER BY completed ASC, sort_order ASC, created_at DESC",
         )?;
@@ -33,6 +34,8 @@ pub fn get_todos(db: State<Database>) -> Result<Vec<Todo>, String> {
                 end_time: row.get(11)?,
                 created_at: row.get(12)?,
                 updated_at: row.get(13)?,
+                agent_id: row.get(14)?,
+                agent_project_path: row.get(15)?,
                 subtasks: Vec::new(),
             })
         })?;
@@ -82,8 +85,8 @@ pub fn create_todo(db: State<Database>, data: CreateTodoRequest) -> Result<Todo,
             .unwrap_or(-1);
 
         conn.execute(
-            "INSERT INTO todos (title, description, color, quadrant, notify_at, notify_before, start_time, end_time, sort_order) 
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO todos (title, description, color, quadrant, notify_at, notify_before, start_time, end_time, sort_order, agent_id, agent_project_path) 
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             (
                 &data.title,
                 &data.description,
@@ -94,15 +97,17 @@ pub fn create_todo(db: State<Database>, data: CreateTodoRequest) -> Result<Todo,
                 &data.start_time,
                 &data.end_time,
                 max_order + 1,
+                &data.agent_id,
+                &data.agent_project_path,
             ),
         )?;
 
         let id = conn.last_insert_rowid();
 
-        // 返回新创建的待办
         conn.query_row(
             "SELECT id, title, description, color, quadrant, notify_at, notify_before, 
-                    notified, completed, sort_order, start_time, end_time, created_at, updated_at 
+                    notified, completed, sort_order, start_time, end_time, created_at, updated_at,
+                    agent_id, agent_project_path
              FROM todos WHERE id = ?",
             [id],
             |row| {
@@ -121,6 +126,8 @@ pub fn create_todo(db: State<Database>, data: CreateTodoRequest) -> Result<Todo,
                     end_time: row.get(11)?,
                     created_at: row.get(12)?,
                     updated_at: row.get(13)?,
+                    agent_id: row.get(14)?,
+                    agent_project_path: row.get(15)?,
                     subtasks: Vec::new(),
                 })
             },
@@ -187,6 +194,20 @@ pub fn update_todo(db: State<Database>, id: i64, data: UpdateTodoRequest) -> Res
             updates.push("end_time = ?");
             params.push(Box::new(end_time.clone()));
         }
+        // Agent 绑定
+        if data.clear_agent {
+            updates.push("agent_id = NULL");
+            updates.push("agent_project_path = NULL");
+        } else {
+            if let Some(agent_id) = data.agent_id {
+                updates.push("agent_id = ?");
+                params.push(Box::new(agent_id));
+            }
+            if let Some(ref path) = data.agent_project_path {
+                updates.push("agent_project_path = ?");
+                params.push(Box::new(path.clone()));
+            }
+        }
 
         if updates.is_empty() {
             return Err(rusqlite::Error::InvalidParameterName(
@@ -202,10 +223,10 @@ pub fn update_todo(db: State<Database>, id: i64, data: UpdateTodoRequest) -> Res
         let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         conn.execute(&sql, params_refs.as_slice())?;
 
-        // 返回更新后的待办
         let mut todo = conn.query_row(
             "SELECT id, title, description, color, quadrant, notify_at, notify_before, 
-                    notified, completed, sort_order, start_time, end_time, created_at, updated_at 
+                    notified, completed, sort_order, start_time, end_time, created_at, updated_at,
+                    agent_id, agent_project_path
              FROM todos WHERE id = ?",
             [id],
             |row| {
@@ -224,6 +245,8 @@ pub fn update_todo(db: State<Database>, id: i64, data: UpdateTodoRequest) -> Res
                     end_time: row.get(11)?,
                     created_at: row.get(12)?,
                     updated_at: row.get(13)?,
+                    agent_id: row.get(14)?,
+                    agent_project_path: row.get(15)?,
                     subtasks: Vec::new(),
                 })
             },

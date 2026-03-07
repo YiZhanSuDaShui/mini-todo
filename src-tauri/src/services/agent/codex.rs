@@ -25,11 +25,13 @@ impl AgentRunner for CodexRunner {
         cmd.current_dir(working_dir);
         cmd.args(["exec", "--json", "--full-auto"]);
         cmd.args(["--sandbox", "workspace-write"]);
+        cmd.arg("--skip-git-repo-check");
         if let Some(m) = model {
             if !m.is_empty() {
                 cmd.args(["--model", m]);
             }
         }
+        cmd.arg("--");
         cmd.arg(prompt);
         cmd
     }

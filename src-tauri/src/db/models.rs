@@ -21,6 +21,10 @@ pub struct Todo {
     pub end_time: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// 绑定的 Agent 配置 ID（可为空）
+    pub agent_id: Option<i64>,
+    /// Agent 工作的项目目录（可为空）
+    pub agent_project_path: Option<String>,
     #[serde(default)]
     pub subtasks: Vec<SubTask>,
 }
@@ -54,6 +58,10 @@ pub struct CreateTodoRequest {
     pub start_time: Option<String>,
     /// 截止时间（可为空）
     pub end_time: Option<String>,
+    /// 绑定的 Agent 配置 ID
+    pub agent_id: Option<i64>,
+    /// Agent 工作的项目目录
+    pub agent_project_path: Option<String>,
 }
 
 fn default_quadrant() -> i32 {
@@ -86,6 +94,13 @@ pub struct UpdateTodoRequest {
     /// 是否明确清除截止时间
     #[serde(default)]
     pub clear_end_time: bool,
+    /// 绑定的 Agent 配置 ID
+    pub agent_id: Option<i64>,
+    /// Agent 工作的项目目录
+    pub agent_project_path: Option<String>,
+    /// 是否明确清除 Agent 绑定
+    #[serde(default)]
+    pub clear_agent: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

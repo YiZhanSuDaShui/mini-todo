@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { ref, nextTick, onBeforeUnmount, watch } from 'vue'
+import { ref, nextTick, onBeforeUnmount, onMounted } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { AgentEvent } from '@/types/agent'
 
 const props = defineProps<{
-  taskId?: string
+  taskId: string
+  initialStatus?: 'idle' | 'running' | 'completed' | 'failed'
+  initialLogs?: Array<{ content: string; level: string }>
+  initialStartTime?: number
 }>()
 
 interface LogLine {
@@ -22,6 +25,7 @@ const status = ref<'idle' | 'running' | 'completed' | 'failed'>('idle')
 const startTime = ref(0)
 const elapsed = ref(0)
 let timer: ReturnType<typeof setInterval> | null = null
+let unlisten: UnlistenFn | null = null
 
 function appendLog(content: string, level: string = 'stdout') {
   logLines.value.push({ content, level, timestamp: Date.now() })
@@ -59,9 +63,10 @@ function handleEvent(event: AgentEvent) {
   }
 }
 
-function startExecution() {
-  status.value = 'running'
-  startTime.value = Date.now()
+function startTimer(fromTime: number) {
+  startTime.value = fromTime
+  elapsed.value = Math.floor((Date.now() - fromTime) / 1000)
+  stopTimer()
   timer = setInterval(() => {
     elapsed.value = Math.floor((Date.now() - startTime.value) / 1000)
   }, 1000)
@@ -72,12 +77,6 @@ function stopTimer() {
     clearInterval(timer)
     timer = null
   }
-}
-
-function clearLog() {
-  logLines.value = []
-  inputTokens.value = 0
-  outputTokens.value = 0
 }
 
 function handleScroll() {
@@ -92,42 +91,30 @@ function formatElapsed(secs: number): string {
   return m > 0 ? `${m}m ${s}s` : `${s}s`
 }
 
-let unlisten: UnlistenFn | null = null
-
-async function startListening(taskId: string) {
-  if (unlisten) {
-    unlisten()
-    unlisten = null
+onMounted(async () => {
+  if (props.initialLogs?.length) {
+    for (const log of props.initialLogs) {
+      logLines.value.push({ content: log.content, level: log.level, timestamp: Date.now() })
+    }
   }
-  unlisten = await listen<AgentEvent>(`agent:log:${taskId}`, (event) => {
-    handleEvent(event.payload)
-  })
-}
 
-function stopListening() {
-  if (unlisten) {
-    unlisten()
-    unlisten = null
-  }
-}
+  status.value = props.initialStatus || 'idle'
 
-watch(() => props.taskId, async (newId) => {
-  clearLog()
-  status.value = 'idle'
-  elapsed.value = 0
-  if (newId) {
-    await startListening(newId)
-  } else {
-    stopListening()
+  if (status.value === 'running') {
+    startTimer(props.initialStartTime || Date.now())
+    unlisten = await listen<AgentEvent>(`agent:log:${props.taskId}`, (event) => {
+      handleEvent(event.payload)
+    })
   }
 })
 
 onBeforeUnmount(() => {
   stopTimer()
-  stopListening()
+  if (unlisten) {
+    unlisten()
+    unlisten = null
+  }
 })
-
-defineExpose({ handleEvent, appendLog, startExecution, clearLog, startListening, stopListening })
 </script>
 
 <template>

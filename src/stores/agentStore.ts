@@ -1,17 +1,49 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type {
   AgentConfig,
   CreateAgentRequest,
   UpdateAgentRequest,
   AgentHealthStatus,
+  AgentEvent,
 } from '@/types/agent'
+
+export interface ExecutionInfo {
+  taskId: string
+  subtaskId: number
+  agentId: number
+  status: 'running' | 'completed' | 'failed' | 'cancelled'
+  logs: Array<{ content: string; level: string; timestampMs: number }>
+  startTimeMs: number
+  durationMs?: number
+  error?: string
+}
+
+export interface ExecutionState {
+  taskId: string
+  status: string
+  logs: Array<{ content: string; level: string; timestampMs: number }>
+  result?: {
+    textResponse: string
+    inputTokens?: number
+    outputTokens?: number
+    exitCode: number
+    durationMs: number
+  }
+  error?: string
+  startTimeMs: number
+  durationMs?: number
+}
 
 export const useAgentStore = defineStore('agent', () => {
   const agents = ref<AgentConfig[]>([])
   const healthStatuses = ref<Map<number, AgentHealthStatus>>(new Map())
   const loading = ref(false)
+
+  const activeExecutions = reactive<Map<number, ExecutionInfo>>(new Map())
+  const eventListeners = new Map<string, UnlistenFn>()
 
   const enabledAgents = computed(() => agents.value.filter(a => a.enabled))
   const agentCount = computed(() => agents.value.length)
@@ -65,24 +97,58 @@ export const useAgentStore = defineStore('agent', () => {
     return healthStatuses.value.get(id)
   }
 
-  interface ExecutionResult {
-    textResponse: string
-    inputTokens?: number
-    outputTokens?: number
-    estimatedCostUsd?: number
-    modelUsed?: string
-    sessionId?: string
-    exitCode: number
-    durationMs: number
+  function getExecutionForSubtask(subtaskId: number): ExecutionInfo | undefined {
+    return activeExecutions.get(subtaskId)
   }
 
-  async function executeAgent(
+  async function startBackgroundExecution(
     agentId: number,
     prompt: string,
     projectPath: string,
     taskId: string,
-  ): Promise<ExecutionResult> {
-    return await invoke<ExecutionResult>('execute_agent', {
+    subtaskId: number,
+  ): Promise<void> {
+    const info: ExecutionInfo = {
+      taskId,
+      subtaskId,
+      agentId,
+      status: 'running',
+      logs: [],
+      startTimeMs: Date.now(),
+    }
+    activeExecutions.set(subtaskId, info)
+
+    const unlisten = await listen<AgentEvent>(`agent:log:${taskId}`, (event) => {
+      const exec = activeExecutions.get(subtaskId)
+      if (!exec) return
+
+      const payload = event.payload
+      switch (payload.kind) {
+        case 'Log':
+          exec.logs.push({
+            content: payload.content || '',
+            level: payload.level || 'stdout',
+            timestampMs: Date.now(),
+          })
+          break
+        case 'TokenUsage':
+          break
+        case 'Completed':
+          exec.status = 'completed'
+          exec.durationMs = Date.now() - exec.startTimeMs
+          cleanupListener(taskId)
+          break
+        case 'Failed':
+          exec.status = 'failed'
+          exec.error = payload.error
+          exec.durationMs = Date.now() - exec.startTimeMs
+          cleanupListener(taskId)
+          break
+      }
+    })
+    eventListeners.set(taskId, unlisten)
+
+    await invoke('start_agent_execution', {
       agentId,
       prompt,
       projectPath,
@@ -90,8 +156,29 @@ export const useAgentStore = defineStore('agent', () => {
     })
   }
 
+  function cleanupListener(taskId: string) {
+    const unlisten = eventListeners.get(taskId)
+    if (unlisten) {
+      unlisten()
+      eventListeners.delete(taskId)
+    }
+  }
+
   async function cancelExecution(taskId: string) {
     await invoke('cancel_agent_execution', { taskId })
+    cleanupListener(taskId)
+  }
+
+  async function fetchExecutionState(taskId: string): Promise<ExecutionState | null> {
+    return await invoke<ExecutionState | null>('get_agent_execution_state', { taskId })
+  }
+
+  function removeExecution(subtaskId: number) {
+    const exec = activeExecutions.get(subtaskId)
+    if (exec) {
+      cleanupListener(exec.taskId)
+      activeExecutions.delete(subtaskId)
+    }
   }
 
   return {
@@ -100,6 +187,7 @@ export const useAgentStore = defineStore('agent', () => {
     loading,
     enabledAgents,
     agentCount,
+    activeExecutions,
     loadAgents,
     addAgent,
     editAgent,
@@ -107,7 +195,10 @@ export const useAgentStore = defineStore('agent', () => {
     checkHealth,
     checkAllHealth,
     getHealthStatus,
-    executeAgent,
+    getExecutionForSubtask,
+    startBackgroundExecution,
     cancelExecution,
+    fetchExecutionState,
+    removeExecution,
   }
 })

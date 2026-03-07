@@ -58,6 +58,25 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("INSERT INTO migrations (version) VALUES (8)", [])?;
     }
 
+    if current_version < 9 {
+        migration_v9(conn)?;
+        conn.execute("INSERT INTO migrations (version) VALUES (9)", [])?;
+    }
+
+    Ok(())
+}
+
+/// 迁移 v9：todos 表新增 agent_id 和 agent_project_path 字段，
+/// 用于在待办级别绑定 Agent 配置，子任务执行时使用。
+fn migration_v9(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "ALTER TABLE todos ADD COLUMN agent_id INTEGER REFERENCES agent_configs(id) ON DELETE SET NULL",
+        [],
+    )?;
+    conn.execute(
+        "ALTER TABLE todos ADD COLUMN agent_project_path TEXT",
+        [],
+    )?;
     Ok(())
 }
 

@@ -64,9 +64,10 @@ use commands::{
     check_all_agents_health,
     create_agent,
     delete_agent,
-    execute_agent,
     get_agent,
+    get_agent_execution_state,
     get_agents,
+    start_agent_execution,
     update_agent,
 };
 
@@ -337,7 +338,8 @@ pub fn run() {
             delete_agent,
             check_agent_health,
             check_all_agents_health,
-            execute_agent,
+            start_agent_execution,
+            get_agent_execution_state,
             cancel_agent_execution,
         ])
         .build(tauri::generate_context!())

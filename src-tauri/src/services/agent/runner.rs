@@ -4,9 +4,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use serde::Serialize;
+use tauri::Emitter;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::Mutex;
 
 use crate::db::models::{AgentConfig, AgentHealthStatus, SandboxConfig};
 
@@ -61,14 +62,18 @@ fn get_merged_path() -> String {
     }
 }
 
-/// 在合并后的 PATH 目录中搜索可执行文件的完整路径。
-/// 遍历 PATH 中的每个目录，结合 PATHEXT 扩展名查找匹配的可执行文件。
+/// 在合并后的 PATH 目录中搜索可执行文件。
+/// 返回找到的完整路径和文件类型（exe 或 cmd）。
 #[cfg(target_os = "windows")]
-fn resolve_in_path(program: &str) -> Option<String> {
+enum ResolvedProgram {
+    Exe(String),
+    CmdScript { node_exe: String, script: String },
+    NotFound,
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_in_path(program: &str) -> ResolvedProgram {
     let merged = get_merged_path();
-    let pathext = std::env::var("PATHEXT")
-        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD;.VBS;.JS".to_string());
-    let extensions: Vec<&str> = pathext.split(';').collect();
 
     for dir in merged.split(';') {
         let dir = dir.trim();
@@ -77,54 +82,140 @@ fn resolve_in_path(program: &str) -> Option<String> {
         }
         let base = Path::new(dir);
 
-        for ext in &extensions {
-            let candidate = base.join(format!("{}{}", program, ext));
-            if candidate.exists() {
-                return Some(candidate.to_string_lossy().to_string());
-            }
+        let exe = base.join(format!("{}.exe", program));
+        if exe.exists() {
+            return ResolvedProgram::Exe(exe.to_string_lossy().to_string());
+        }
+        let com = base.join(format!("{}.com", program));
+        if com.exists() {
+            return ResolvedProgram::Exe(com.to_string_lossy().to_string());
         }
 
-        let exact = base.join(program);
-        if exact.exists() {
-            return Some(exact.to_string_lossy().to_string());
+        let cmd_file = base.join(format!("{}.cmd", program));
+        if cmd_file.exists() {
+            if let Some((node, script)) = parse_npm_cmd_file(&cmd_file) {
+                return ResolvedProgram::CmdScript {
+                    node_exe: node,
+                    script,
+                };
+            }
         }
     }
 
-    None
+    ResolvedProgram::NotFound
+}
+
+/// 解析 npm 生成的 .cmd 包装脚本，提取底层的 node.exe 和 JS
+/// 脚本路径，使得我们可以直接通过 node.exe 调用而不经过 cmd.exe，
+/// 避免 Rust CVE-2024-24576 安全限制导致的参数校验失败。
+///
+/// npm .cmd 文件典型结构：
+///   IF EXIST "%dp0%\node.exe" ( SET "_prog=%dp0%\node.exe" )
+///   "%_prog%"  "%dp0%\node_modules\...\script.js" %*
+///
+/// 解析策略：
+/// 1. 从 IF EXIST 或 SET 行提取 node.exe 的相对路径
+/// 2. 从包含 %* 的执行行提取 .js/.mjs 脚本路径
+#[cfg(target_os = "windows")]
+fn parse_npm_cmd_file(cmd_path: &Path) -> Option<(String, String)> {
+    let content = std::fs::read_to_string(cmd_path).ok()?;
+    let cmd_dir = cmd_path.parent()?;
+
+    let mut node_path: Option<String> = None;
+    let mut script_path: Option<String> = None;
+
+    for line in content.lines() {
+        let line = line.trim();
+
+        if line.contains("node.exe") && node_path.is_none() {
+            for part in line.split('"') {
+                if part.contains("node.exe") && !part.contains("node_modules") {
+                    let resolved = part
+                        .replace("%dp0%\\", "")
+                        .replace("%~dp0\\", "")
+                        .replace("%dp0%/", "")
+                        .replace("%~dp0/", "");
+                    let full = cmd_dir.join(&resolved);
+                    if full.exists() {
+                        node_path = Some(full.to_string_lossy().to_string());
+                        break;
+                    }
+                }
+            }
+        }
+
+        if line.contains("%*") && (line.contains(".js") || line.contains(".mjs")) && script_path.is_none() {
+            for part in line.split('"') {
+                if part.ends_with(".js") || part.ends_with(".mjs") {
+                    let resolved = part
+                        .replace("%dp0%\\", "")
+                        .replace("%~dp0\\", "")
+                        .replace("%dp0%/", "")
+                        .replace("%~dp0/", "");
+                    let full = cmd_dir.join(&resolved);
+                    if full.exists() {
+                        script_path = Some(full.to_string_lossy().to_string());
+                        break;
+                    }
+                }
+            }
+        }
+
+        if node_path.is_some() && script_path.is_some() {
+            break;
+        }
+    }
+
+    match (node_path, script_path) {
+        (Some(node), Some(script)) => Some((node, script)),
+        _ => None,
+    }
 }
 
 /// 创建一个能正确找到 CLI 可执行文件的 Command。
-/// 在 Windows 上先通过注册表 PATH 解析出完整路径，解决 GUI 进程
-/// PATH 不完整的问题；同时为子进程设置完整 PATH 环境变量。
+/// 在 Windows 上通过注册表 PATH 搜索可执行文件：
+/// - 找到 .exe 文件时直接使用完整路径
+/// - 找到 .cmd (npm包装脚本) 时，解析出底层 node.exe + JS 脚本，
+///   直接通过 node.exe 调用，绕过 cmd.exe 的参数限制
 pub fn create_command(program: &str) -> std::process::Command {
-    let resolved = resolve_program(program);
-    let mut cmd = std::process::Command::new(&resolved);
-
     #[cfg(target_os = "windows")]
     {
+        let path = Path::new(program);
+        if !path.is_absolute() && !program.contains('\\') && !program.contains('/') {
+            match resolve_in_path(program) {
+                ResolvedProgram::Exe(exe_path) => {
+                    let mut cmd = std::process::Command::new(&exe_path);
+                    let merged = get_merged_path();
+                    if !merged.is_empty() {
+                        cmd.env("PATH", merged);
+                    }
+                    return cmd;
+                }
+                ResolvedProgram::CmdScript { node_exe, script } => {
+                    let mut cmd = std::process::Command::new(&node_exe);
+                    cmd.arg(&script);
+                    let merged = get_merged_path();
+                    if !merged.is_empty() {
+                        cmd.env("PATH", merged);
+                    }
+                    return cmd;
+                }
+                ResolvedProgram::NotFound => {}
+            }
+        }
+
+        let mut cmd = std::process::Command::new(program);
         let merged = get_merged_path();
         if !merged.is_empty() {
             cmd.env("PATH", merged);
         }
+        cmd
     }
 
-    cmd
-}
-
-fn resolve_program(program: &str) -> String {
-    let path = Path::new(program);
-    if path.is_absolute() || program.contains('\\') || program.contains('/') {
-        return program.to_string();
-    }
-
-    #[cfg(target_os = "windows")]
+    #[cfg(not(target_os = "windows"))]
     {
-        if let Some(resolved) = resolve_in_path(program) {
-            return resolved;
-        }
+        std::process::Command::new(program)
     }
-
-    program.to_string()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -187,9 +278,30 @@ pub trait AgentRunner: Send + Sync {
     fn agent_type(&self) -> &str;
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionState {
+    pub task_id: String,
+    pub status: String,
+    pub logs: Vec<CachedLog>,
+    pub result: Option<AgentOutput>,
+    pub error: Option<String>,
+    pub start_time_ms: u64,
+    pub duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CachedLog {
+    pub content: String,
+    pub level: String,
+    pub timestamp_ms: u64,
+}
+
 pub struct AgentManager {
     runners: HashMap<String, Box<dyn AgentRunner>>,
     active_executions: Arc<Mutex<HashMap<String, ExecutionHandle>>>,
+    execution_states: Arc<Mutex<HashMap<String, ExecutionState>>>,
 }
 
 impl AgentManager {
@@ -203,17 +315,18 @@ impl AgentManager {
         Self {
             runners,
             active_executions: Arc::new(Mutex::new(HashMap::new())),
+            execution_states: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    pub async fn execute(
+    pub async fn start_background_execution(
         &self,
-        config: &AgentConfig,
-        prompt: &str,
-        project_path: &str,
-        task_id: &str,
-        event_sender: mpsc::UnboundedSender<AgentEvent>,
-    ) -> Result<AgentOutput, String> {
+        config: AgentConfig,
+        prompt: String,
+        project_path: String,
+        task_id: String,
+        app: tauri::AppHandle,
+    ) -> Result<(), String> {
         let runner = self
             .runners
             .get(&config.agent_type)
@@ -224,15 +337,17 @@ impl AgentManager {
             serde_json::from_str(&config.sandbox_config).unwrap_or_default();
 
         let work_dir = if sandbox.enable_worktree_isolation {
-            let wt = WorktreeManager::create(project_path, task_id)?;
-            wt.path().to_string_lossy().to_string()
+            match WorktreeManager::create(&project_path, &task_id) {
+                Ok(wt) => wt.path().to_string_lossy().to_string(),
+                Err(_) => project_path.clone(),
+            }
         } else {
-            project_path.to_string()
+            project_path.clone()
         };
 
         let mut cmd = runner.build_command(
             &config.cli_path,
-            prompt,
+            &prompt,
             Path::new(&work_dir),
             Some(&config.default_model),
             &sandbox.allowed_tools,
@@ -246,22 +361,82 @@ impl AgentManager {
             }
         }
 
-        let output = self
-            .run_with_streaming(cmd, runner.as_ref(), config.timeout_seconds as u64, event_sender)
-            .await?;
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
 
-        Ok(output)
+        let state = ExecutionState {
+            task_id: task_id.clone(),
+            status: "running".to_string(),
+            logs: Vec::new(),
+            result: None,
+            error: None,
+            start_time_ms: now_ms,
+            duration_ms: None,
+        };
+        self.execution_states
+            .lock()
+            .await
+            .insert(task_id.clone(), state);
+
+        let states = self.execution_states.clone();
+        let timeout_secs = config.timeout_seconds as u64;
+        let task_id_clone = task_id.clone();
+        let event_name = format!("agent:log:{}", task_id);
+
+        tokio::spawn(async move {
+            let start = Instant::now();
+            let run_result = Self::run_process(
+                cmd,
+                timeout_secs,
+                states.clone(),
+                &task_id_clone,
+                app.clone(),
+                &event_name,
+            )
+            .await;
+
+            let duration_ms = start.elapsed().as_millis() as u64;
+            let mut states_lock = states.lock().await;
+            if let Some(state) = states_lock.get_mut(&task_id_clone) {
+                state.duration_ms = Some(duration_ms);
+                match run_result {
+                    Ok(output) => {
+                        state.status = "completed".to_string();
+                        state.result = Some(output.clone());
+                        let _ = app.emit(
+                            &event_name,
+                            AgentEvent::Completed {
+                                exit_code: output.exit_code,
+                                result: output.text_response.clone(),
+                            },
+                        );
+                    }
+                    Err(err) => {
+                        state.status = "failed".to_string();
+                        state.error = Some(err.clone());
+                        let _ = app.emit(
+                            &event_name,
+                            AgentEvent::Failed { error: err },
+                        );
+                    }
+                }
+            }
+        });
+
+        Ok(())
     }
 
-    async fn run_with_streaming(
-        &self,
+    async fn run_process(
         cmd: std::process::Command,
-        runner: &dyn AgentRunner,
         timeout_secs: u64,
-        event_sender: mpsc::UnboundedSender<AgentEvent>,
+        states: Arc<Mutex<HashMap<String, ExecutionState>>>,
+        task_id: &str,
+        app: tauri::AppHandle,
+        event_name: &str,
     ) -> Result<AgentOutput, String> {
-        let start = Instant::now();
-        let mut collected_events: Vec<AgentEvent> = Vec::new();
+        use tauri::Emitter;
 
         let mut tokio_cmd: TokioCommand = cmd.into();
         tokio_cmd.stdout(std::process::Stdio::piped());
@@ -272,28 +447,167 @@ impl AgentManager {
             .map_err(|e| format!("启动 Agent 进程失败: {}", e))?;
 
         let stdout = child.stdout.take().ok_or("无法获取 stdout")?;
-        let mut reader = BufReader::new(stdout).lines();
+        let stderr = child.stderr.take().ok_or("无法获取 stderr")?;
+        let mut stdout_reader = BufReader::new(stdout).lines();
+        let mut stderr_reader = BufReader::new(stderr).lines();
+
+        let states_stderr = states.clone();
+        let task_id_stderr = task_id.to_string();
+        let app_stderr = app.clone();
+        let event_name_stderr = event_name.to_string();
+        let stderr_handle = tokio::spawn(async move {
+            let mut stderr_lines = Vec::new();
+            while let Ok(Some(line)) = stderr_reader.next_line().await {
+                stderr_lines.push(line.clone());
+                let event = AgentEvent::Log {
+                    content: line.clone(),
+                    level: "stderr".to_string(),
+                };
+                let _ = app_stderr.emit(&event_name_stderr, &event);
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                let mut lock = states_stderr.lock().await;
+                if let Some(s) = lock.get_mut(&task_id_stderr) {
+                    s.logs.push(CachedLog {
+                        content: line,
+                        level: "stderr".to_string(),
+                        timestamp_ms: now,
+                    });
+                }
+            }
+            stderr_lines
+        });
+
+        let states_stdout = states.clone();
+        let task_id_stdout = task_id.to_string();
+        let app_stdout = app.clone();
+        let event_name_stdout = event_name.to_string();
 
         let timeout = tokio::time::Duration::from_secs(timeout_secs);
+        let mut collected_events: Vec<AgentEvent> = Vec::new();
 
         let result = tokio::time::timeout(timeout, async {
-            while let Ok(Some(line)) = reader.next_line().await {
-                if let Some(event) = runner.parse_event_line(&line) {
-                    let _ = event_sender.send(event.clone());
-                    collected_events.push(event);
+            while let Ok(Some(line)) = stdout_reader.next_line().await {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
+                    let event_type = json["type"].as_str().unwrap_or("");
+                    let log_event = AgentEvent::Log {
+                        content: line.clone(),
+                        level: "stdout".to_string(),
+                    };
+                    let _ = app_stdout.emit(&event_name_stdout, &log_event);
+
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    let mut lock = states_stdout.lock().await;
+                    if let Some(s) = lock.get_mut(&task_id_stdout) {
+                        s.logs.push(CachedLog {
+                            content: line.clone(),
+                            level: "stdout".to_string(),
+                            timestamp_ms: now,
+                        });
+                    }
+                    drop(lock);
+
+                    if event_type == "turn.completed" || event_type == "result" {
+                        let usage_event = if event_type == "turn.completed" {
+                            let usage = &json["usage"];
+                            Some(AgentEvent::TokenUsage {
+                                input_tokens: usage["input_tokens"].as_u64().unwrap_or(0),
+                                output_tokens: usage["output_tokens"].as_u64().unwrap_or(0),
+                            })
+                        } else {
+                            None
+                        };
+                        if let Some(evt) = usage_event {
+                            let _ = app_stdout.emit(&event_name_stdout, &evt);
+                            collected_events.push(evt);
+                        }
+                    }
+                    collected_events.push(log_event);
                 }
             }
             child.wait().await
         })
         .await;
 
-        let duration_ms = start.elapsed().as_millis() as u64;
+        let stderr_lines = stderr_handle.await.unwrap_or_default();
 
         match result {
             Ok(Ok(status)) => {
                 let exit_code = status.code().unwrap_or(-1);
-                let output = runner.extract_output(&collected_events, exit_code, duration_ms);
-                Ok(output)
+                let duration_ms = 0u64;
+                if exit_code != 0 && collected_events.is_empty() && !stderr_lines.is_empty() {
+                    return Err(format!(
+                        "Agent 进程退出码 {}:\n{}",
+                        exit_code,
+                        stderr_lines.join("\n")
+                    ));
+                }
+                let mut text_response = String::new();
+                let mut total_input = 0u64;
+                let mut total_output = 0u64;
+                for evt in &collected_events {
+                    match evt {
+                        AgentEvent::Log { content, .. } => {
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(content) {
+                                let t = json["type"].as_str().unwrap_or("");
+                                match t {
+                                    "item.started" | "item.completed" => {
+                                        let item = &json["item"];
+                                        let item_type = item["type"]
+                                            .as_str()
+                                            .or_else(|| item["item_type"].as_str())
+                                            .unwrap_or("");
+                                        match item_type {
+                                            "agent_message" | "assistant_message" => {
+                                                if let Some(text) = item["text"].as_str() {
+                                                    if !text_response.is_empty() {
+                                                        text_response.push('\n');
+                                                    }
+                                                    text_response.push_str(text);
+                                                }
+                                            }
+                                            "command_execution" => {
+                                                if let Some(cmd_str) = item["command"].as_str() {
+                                                    if !text_response.is_empty() {
+                                                        text_response.push('\n');
+                                                    }
+                                                    text_response.push_str(&format!("$ {}", cmd_str));
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    "result" => {
+                                        if let Some(text) = json["result"].as_str() {
+                                            text_response = text.to_string();
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        AgentEvent::TokenUsage { input_tokens, output_tokens } => {
+                            total_input += input_tokens;
+                            total_output += output_tokens;
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(AgentOutput {
+                    text_response,
+                    input_tokens: Some(total_input),
+                    output_tokens: Some(total_output),
+                    estimated_cost_usd: None,
+                    model_used: None,
+                    session_id: None,
+                    exit_code,
+                    duration_ms,
+                })
             }
             Ok(Err(e)) => Err(format!("Agent 进程异常: {}", e)),
             Err(_) => {
@@ -301,6 +615,10 @@ impl AgentManager {
                 Err(format!("Agent 执行超时（{}秒）", timeout_secs))
             }
         }
+    }
+
+    pub async fn get_execution_state(&self, task_id: &str) -> Option<ExecutionState> {
+        self.execution_states.lock().await.get(task_id).cloned()
     }
 
     fn api_key_env_var(&self, agent_type: &str) -> &str {
@@ -383,6 +701,10 @@ impl AgentManager {
         let mut executions = self.active_executions.lock().await;
         if let Some(handle) = executions.remove(execution_id) {
             handle.cancel();
+            let mut states = self.execution_states.lock().await;
+            if let Some(state) = states.get_mut(execution_id) {
+                state.status = "cancelled".to_string();
+            }
             Ok(())
         } else {
             Err("未找到执行中的任务".to_string())

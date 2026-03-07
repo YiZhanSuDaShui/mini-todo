@@ -10,7 +10,6 @@ import type { Todo, CreateTodoRequest, UpdateTodoRequest, CreateSubTaskRequest, 
 import { DEFAULT_COLOR, PRESET_COLORS, QUADRANT_INFO, DEFAULT_QUADRANT } from '@/types'
 import { useAgentStore } from '@/stores/agentStore'
 import { AGENT_TYPE_INFO } from '@/types/agent'
-import AgentLogPanel from '@/components/AgentLogPanel.vue'
 
 const route = useRoute()
 const todoId = computed(() => route.query.id ? parseInt(route.query.id as string) : null)
@@ -241,6 +240,12 @@ async function loadTodo() {
       if (isCustomNotifyBefore.value) {
         customNotifyBefore.value = todo.value.notifyBefore
       }
+
+      // 恢复 Agent 配置
+      agentForm.value = {
+        agentId: todo.value.agentId ?? null,
+        projectPath: todo.value.agentProjectPath ?? '',
+      }
     }
   } catch (e) {
     console.error('Failed to load todo:', e)
@@ -273,6 +278,8 @@ async function handleSave() {
       const shouldClearStartTime = originalStartTime.value !== null && !form.value.startTime
       const shouldClearEndTime = originalEndTime.value !== null && !form.value.endTime
       
+      const shouldClearAgent = (todo.value?.agentId !== null) && !agentForm.value.agentId
+
       const data: UpdateTodoRequest = {
         title: form.value.title,
         description: form.value.description || null,
@@ -284,7 +291,10 @@ async function handleSave() {
         startTime: form.value.startTime || undefined,
         endTime: form.value.endTime || undefined,
         clearStartTime: shouldClearStartTime,
-        clearEndTime: shouldClearEndTime
+        clearEndTime: shouldClearEndTime,
+        agentId: agentForm.value.agentId || undefined,
+        agentProjectPath: agentForm.value.projectPath || undefined,
+        clearAgent: shouldClearAgent,
       }
       await invoke('update_todo', { id: todoId.value, data })
     } else {
@@ -296,7 +306,9 @@ async function handleSave() {
         notifyAt: form.value.notifyAt || undefined,
         notifyBefore: form.value.notifyBefore,
         startTime: form.value.startTime || undefined,
-        endTime: form.value.endTime || undefined
+        endTime: form.value.endTime || undefined,
+        agentId: agentForm.value.agentId || undefined,
+        agentProjectPath: agentForm.value.projectPath || undefined,
       }
       const newTodo = await invoke<Todo>('create_todo', { data })
       
@@ -501,7 +513,9 @@ function handleInlineEditKeydown(e: KeyboardEvent, subtaskId: number) {
 async function openSubtaskEditorWindow(subtaskId: number) {
   if (isSubtaskEditorOpen.value) return
 
-  const url = `#/subtask-editor?id=${subtaskId}`
+  const agentId = agentForm.value.agentId ?? todo.value?.agentId ?? ''
+  const agentPath = encodeURIComponent(agentForm.value.projectPath || todo.value?.agentProjectPath || '')
+  const url = `#/subtask-editor?id=${subtaskId}&agentId=${agentId}&agentProjectPath=${agentPath}`
   const label = `subtask-editor-${Date.now()}`
 
   try {
@@ -555,111 +569,56 @@ async function openSubtaskEditorWindow(subtaskId: number) {
   }
 }
 
-// ========== Agent 执行 ==========
+// ========== Agent 配置 ==========
 const agentStore = useAgentStore()
-const agentDialogVisible = ref(false)
-const agentExecuting = ref(false)
-const agentTaskId = ref('')
-const logPanelRef = ref<InstanceType<typeof AgentLogPanel> | null>(null)
+const agentConfigVisible = ref(false)
 
 const agentForm = ref({
   agentId: null as number | null,
-  prompt: '',
   projectPath: '',
 })
 
-function openAgentDialog() {
+function openAgentConfig() {
   if (agentStore.enabledAgents.length === 0) {
     ElMessage.warning('请先在设置中配置并启用 Agent')
     return
   }
 
-  const ctx = buildPromptContext()
   agentForm.value = {
-    agentId: agentStore.enabledAgents[0]?.id ?? null,
-    prompt: ctx,
-    projectPath: '',
+    agentId: todo.value?.agentId ?? agentStore.enabledAgents[0]?.id ?? null,
+    projectPath: todo.value?.agentProjectPath ?? '',
   }
-  agentTaskId.value = ''
-  agentDialogVisible.value = true
+  agentConfigVisible.value = true
 }
 
-function buildPromptContext(): string {
-  const lines: string[] = []
-  const title = form.value.title.trim()
-  const desc = form.value.description?.trim()
-  if (title) lines.push(`任务: ${title}`)
-  if (desc) lines.push(`描述: ${desc}`)
-
-  const subs = currentSubtaskList.value
-    .filter(s => !s.completed)
-    .map(s => s.title)
-  if (subs.length > 0) {
-    lines.push(`未完成子任务:`)
-    subs.forEach(s => lines.push(`  - ${s}`))
-  }
-
-  if (lines.length > 0) {
-    lines.push('')
-    lines.push('请根据以上任务信息执行相应操作。')
-  }
-  return lines.join('\n')
-}
-
-async function handleAgentExecute() {
+function saveAgentConfig() {
   if (!agentForm.value.agentId) {
     ElMessage.warning('请选择 Agent')
     return
   }
-  if (!agentForm.value.prompt.trim()) {
-    ElMessage.warning('请输入执行指令')
-    return
-  }
-  if (!agentForm.value.projectPath.trim()) {
-    ElMessage.warning('请输入项目路径')
-    return
-  }
 
-  const taskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  agentTaskId.value = taskId
-  agentExecuting.value = true
-
-  logPanelRef.value?.clearLog()
-  logPanelRef.value?.startExecution()
-
-  try {
-    await logPanelRef.value?.startListening(taskId)
-
-    const result = await agentStore.executeAgent(
-      agentForm.value.agentId,
-      agentForm.value.prompt,
-      agentForm.value.projectPath,
-      taskId,
-    )
-    ElMessage.success(`Agent 执行完成 (${result.durationMs}ms)`)
-  } catch (e) {
-    ElMessage.error('Agent 执行失败: ' + String(e))
-  } finally {
-    agentExecuting.value = false
-  }
+  agentConfigVisible.value = false
+  ElMessage.success('Agent 配置已暂存，保存待办时生效')
 }
 
-async function handleAgentCancel() {
-  if (!agentTaskId.value) return
-  try {
-    await agentStore.cancelExecution(agentTaskId.value)
-    ElMessage.info('已发送取消请求')
-  } catch (e) {
-    ElMessage.error('取消失败: ' + String(e))
-  }
+function clearAgentConfig() {
+  agentForm.value = { agentId: null, projectPath: '' }
+  agentConfigVisible.value = false
+  ElMessage.info('已清除 Agent 配置')
 }
 
-function getAgentLabel(agentId: number): string {
-  const agent = agentStore.agents.find(a => a.id === agentId)
+const currentAgentLabel = computed(() => {
+  const id = agentForm.value.agentId ?? todo.value?.agentId
+  if (!id) return ''
+  const agent = agentStore.agents.find(a => a.id === id)
   if (!agent) return ''
   const typeInfo = AGENT_TYPE_INFO[agent.agentType]
   return `${agent.name} (${typeInfo?.label || agent.agentType})`
-}
+})
+
+const hasAgentConfig = computed(() => {
+  return !!(agentForm.value.agentId || todo.value?.agentId)
+})
 
 // 关闭窗口
 function handleClose() {
@@ -868,12 +827,12 @@ function handleClose() {
       <div class="window-footer">
         <div class="footer-left">
           <el-button
-            type="info"
+            :type="hasAgentConfig ? 'primary' : 'info'"
             plain
-            @click="openAgentDialog"
+            @click="openAgentConfig"
           >
             <el-icon><MagicStick /></el-icon>
-            Agent
+            {{ hasAgentConfig ? currentAgentLabel : 'Agent' }}
           </el-button>
         </div>
         <div class="footer-right">
@@ -1026,84 +985,47 @@ function handleClose() {
     <!-- 模态遮罩：子任务编辑窗口打开时阻止操作 -->
     <div v-if="isSubtaskEditorOpen" class="modal-overlay"></div>
 
-    <!-- Agent 执行对话框 -->
+    <!-- Agent 配置对话框 -->
     <el-dialog
-      v-model="agentDialogVisible"
-      title="Agent 执行"
-      width="560px"
-      :close-on-click-modal="!agentExecuting"
-      :close-on-press-escape="!agentExecuting"
+      v-model="agentConfigVisible"
+      title="Agent 配置"
+      width="460px"
       append-to-body
-      class="agent-exec-dialog"
-      top="5vh"
+      class="agent-config-dialog"
     >
-      <div style="max-height: 65vh; overflow-y: auto; padding-right: 4px;">
-        <el-form label-position="top" size="default">
-          <el-form-item label="选择 Agent" required>
-            <el-select
-              v-model="agentForm.agentId"
-              style="width: 100%"
-              :disabled="agentExecuting"
-            >
-              <el-option
-                v-for="agent in agentStore.enabledAgents"
-                :key="agent.id"
-                :label="getAgentLabel(agent.id)"
-                :value="agent.id"
-              />
-            </el-select>
-          </el-form-item>
-
-          <el-form-item label="项目路径" required>
-            <el-input
-              v-model="agentForm.projectPath"
-              placeholder="Agent 工作的项目目录，如 D:\Git\my-project"
-              :disabled="agentExecuting"
-              clearable
+      <el-form label-position="top" size="default">
+        <el-form-item label="选择 Agent" required>
+          <el-select
+            v-model="agentForm.agentId"
+            style="width: 100%"
+            placeholder="选择要绑定的 Agent"
+            clearable
+          >
+            <el-option
+              v-for="agent in agentStore.enabledAgents"
+              :key="agent.id"
+              :label="`${agent.name} (${AGENT_TYPE_INFO[agent.agentType]?.label || agent.agentType})`"
+              :value="agent.id"
             />
-          </el-form-item>
+          </el-select>
+        </el-form-item>
 
-          <el-form-item label="执行指令" required>
-            <el-input
-              v-model="agentForm.prompt"
-              type="textarea"
-              :rows="5"
-              placeholder="输入要 Agent 执行的指令..."
-              :disabled="agentExecuting"
-            />
-          </el-form-item>
-        </el-form>
-
-        <AgentLogPanel
-          v-if="agentTaskId"
-          ref="logPanelRef"
-          :task-id="agentTaskId"
-        />
-      </div>
+        <el-form-item label="项目路径">
+          <el-input
+            v-model="agentForm.projectPath"
+            placeholder="Agent 工作的项目目录，如 D:\Git\my-project"
+            clearable
+          />
+          <div class="form-tip">子任务执行 Agent 时使用此目录</div>
+        </el-form-item>
+      </el-form>
 
       <template #footer>
-        <el-button
-          v-if="agentExecuting"
-          type="danger"
-          @click="handleAgentCancel"
-        >
-          <el-icon><CircleClose /></el-icon>
-          取消执行
+        <el-button type="danger" plain @click="clearAgentConfig">
+          清除配置
         </el-button>
-        <el-button
-          v-else
-          @click="agentDialogVisible = false"
-        >
-          关闭
-        </el-button>
-        <el-button
-          v-if="!agentExecuting"
-          type="primary"
-          @click="handleAgentExecute"
-        >
-          <el-icon><VideoPlay /></el-icon>
-          开始执行
-        </el-button>
+        <el-button @click="agentConfigVisible = false">取消</el-button>
+        <el-button type="primary" @click="saveAgentConfig">确定</el-button>
       </template>
     </el-dialog>
   </div>
@@ -1647,10 +1569,17 @@ function handleClose() {
   z-index: 9999;
   cursor: not-allowed;
 }
+
+.form-tip {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-top: 4px;
+  line-height: 1.4;
+}
 </style>
 
 <style>
-.agent-exec-dialog .el-dialog__body {
+.agent-config-dialog .el-dialog__body {
   padding-top: 12px;
 }
 </style>

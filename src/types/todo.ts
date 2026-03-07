@@ -69,6 +69,10 @@ export interface Todo {
   endTime: string | null
   createdAt: string
   updatedAt: string
+  /** 绑定的 Agent 配置 ID（可为空） */
+  agentId: number | null
+  /** Agent 工作的项目目录（可为空） */
+  agentProjectPath: string | null
   subtasks: SubTask[]
 }
 
@@ -86,6 +90,10 @@ export interface CreateTodoRequest {
   startTime?: string
   /** 截止时间 */
   endTime?: string
+  /** 绑定的 Agent 配置 ID */
+  agentId?: number
+  /** Agent 工作的项目目录 */
+  agentProjectPath?: string
 }
 
 // 更新待办请求
@@ -110,6 +118,12 @@ export interface UpdateTodoRequest {
   clearStartTime?: boolean
   /** 是否明确清除截止时间 */
   clearEndTime?: boolean
+  /** 绑定的 Agent 配置 ID */
+  agentId?: number
+  /** Agent 工作的项目目录 */
+  agentProjectPath?: string
+  /** 是否明确清除 Agent 绑定 */
+  clearAgent?: boolean
 }
 
 // 创建子任务请求

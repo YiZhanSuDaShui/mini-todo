@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, onMounted, onBeforeUnmount, nextTick, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { ElMessage } from 'element-plus'
 import { Editor, rootCtx, defaultValueCtx } from '@milkdown/kit/core'
 import { commonmark } from '@milkdown/kit/preset/commonmark'
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
@@ -13,9 +14,16 @@ import { nord } from '@milkdown/theme-nord'
 import type { Node } from '@milkdown/kit/prose/model'
 import type { Uploader, UploadOptions } from '@milkdown/kit/plugin/upload'
 import '@milkdown/theme-nord/style.css'
+import { useAgentStore } from '@/stores/agentStore'
+import { AGENT_TYPE_INFO } from '@/types/agent'
+import AgentLogPanel from '@/components/AgentLogPanel.vue'
 
 const route = useRoute()
 const subtaskId = parseInt(route.query.id as string)
+const agentIdParam = route.query.agentId ? parseInt(route.query.agentId as string) : null
+const agentProjectPath = route.query.agentProjectPath
+  ? decodeURIComponent(route.query.agentProjectPath as string)
+  : ''
 const appWindow = getCurrentWindow()
 
 const title = ref('')
@@ -160,11 +168,117 @@ async function handleMaximize() {
   }
 }
 
+// ========== Agent 执行 ==========
+const agentStore = useAgentStore()
+const agentDialogVisible = ref(false)
+
+const agentForm = ref({
+  agentId: agentIdParam,
+  projectPath: agentProjectPath,
+  prompt: '',
+})
+
+const hasAgentConfig = computed(() => !!agentForm.value.agentId)
+
+const currentExecution = computed(() => agentStore.getExecutionForSubtask(subtaskId))
+const agentExecuting = computed(() => currentExecution.value?.status === 'running')
+const agentTaskId = computed(() => currentExecution.value?.taskId || '')
+
+const currentAgentLabel = computed(() => {
+  if (!agentForm.value.agentId) return ''
+  const agent = agentStore.agents.find(a => a.id === agentForm.value.agentId)
+  if (!agent) return ''
+  const typeInfo = AGENT_TYPE_INFO[agent.agentType]
+  return `${agent.name} (${typeInfo?.label || agent.agentType})`
+})
+
+const logPanelStatus = computed<'idle' | 'running' | 'completed' | 'failed'>(() => {
+  return (currentExecution.value?.status as 'idle' | 'running' | 'completed' | 'failed') || 'idle'
+})
+
+const logPanelLogs = computed(() => {
+  return currentExecution.value?.logs || []
+})
+
+function buildPromptContext(): string {
+  const lines: string[] = []
+  if (title.value.trim()) lines.push(`- ${title.value.trim()}`)
+  if (markdownContent.value.trim()) {
+    lines.push(markdownContent.value.trim())
+  }
+  if (lines.length > 0) {
+    lines.push('')
+    lines.push('请根据以上任务信息执行相应操作。')
+  }
+  return lines.join('\n')
+}
+
+function openAgentDialog() {
+  if (!hasAgentConfig.value) {
+    ElMessage.warning('请先在待办编辑页配置 Agent')
+    return
+  }
+
+  if (!currentExecution.value) {
+    agentForm.value.prompt = buildPromptContext()
+  }
+  agentDialogVisible.value = true
+}
+
+async function handleAgentExecute(background: boolean = false) {
+  if (!agentForm.value.agentId) {
+    ElMessage.warning('未配置 Agent')
+    return
+  }
+  if (!agentForm.value.prompt.trim()) {
+    ElMessage.warning('请输入执行指令')
+    return
+  }
+  if (!agentForm.value.projectPath.trim()) {
+    ElMessage.warning('未配置项目路径，请在待办编辑页设置')
+    return
+  }
+
+  const taskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+  try {
+    await agentStore.startBackgroundExecution(
+      agentForm.value.agentId,
+      agentForm.value.prompt,
+      agentForm.value.projectPath,
+      taskId,
+      subtaskId,
+    )
+    if (background) {
+      agentDialogVisible.value = false
+      ElMessage.info('Agent 已在后台执行')
+    }
+  } catch (e) {
+    ElMessage.error('Agent 启动失败: ' + String(e))
+  }
+}
+
+async function handleAgentCancel() {
+  if (!agentTaskId.value) return
+  try {
+    await agentStore.cancelExecution(agentTaskId.value)
+    ElMessage.info('已发送取消请求')
+  } catch (e) {
+    ElMessage.error('取消失败: ' + String(e))
+  }
+}
+
+function handleClearExecution() {
+  agentStore.removeExecution(subtaskId)
+  agentForm.value.prompt = buildPromptContext()
+}
+
 onMounted(async () => {
   await loadSubtask()
   await nextTick()
   await initEditor()
   editorContainer.value?.addEventListener('click', handleImageClick)
+  agentStore.loadAgents()
 })
 
 onBeforeUnmount(() => {
@@ -204,15 +318,118 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="window-footer">
-      <el-button @click="handleClose">
-        <el-icon><Close /></el-icon>
-        取消
-      </el-button>
-      <el-button type="primary" @click="handleSave" :disabled="!title.trim()">
-        <el-icon><Check /></el-icon>
-        保存
-      </el-button>
+      <div class="footer-left">
+        <el-button
+          v-if="hasAgentConfig"
+          :type="agentExecuting ? 'warning' : currentExecution?.status === 'completed' ? 'success' : currentExecution?.status === 'failed' ? 'danger' : 'info'"
+          plain
+          @click="openAgentDialog"
+        >
+          <el-icon><MagicStick /></el-icon>
+          <template v-if="agentExecuting">
+            执行中...
+          </template>
+          <template v-else-if="currentExecution?.status === 'completed'">
+            执行完成
+          </template>
+          <template v-else-if="currentExecution?.status === 'failed'">
+            执行失败
+          </template>
+          <template v-else>
+            {{ currentAgentLabel || 'Agent' }}
+          </template>
+        </el-button>
+      </div>
+      <div class="footer-right">
+        <el-button @click="handleClose">
+          <el-icon><Close /></el-icon>
+          取消
+        </el-button>
+        <el-button type="primary" @click="handleSave" :disabled="!title.trim()">
+          <el-icon><Check /></el-icon>
+          保存
+        </el-button>
+      </div>
     </div>
+
+    <!-- Agent 执行对话框 -->
+    <el-dialog
+      v-model="agentDialogVisible"
+      title="Agent 执行"
+      width="560px"
+      append-to-body
+      class="agent-exec-dialog"
+      top="5vh"
+    >
+      <div style="max-height: 65vh; overflow-y: auto; padding-right: 4px;">
+        <el-form label-position="top" size="default">
+          <el-form-item label="Agent">
+            <el-input :model-value="currentAgentLabel" disabled />
+          </el-form-item>
+
+          <el-form-item label="项目路径">
+            <el-input :model-value="agentForm.projectPath" disabled />
+          </el-form-item>
+
+          <el-form-item label="执行指令" required>
+            <el-input
+              v-model="agentForm.prompt"
+              type="textarea"
+              :rows="5"
+              placeholder="输入要 Agent 执行的指令..."
+              :disabled="agentExecuting"
+            />
+          </el-form-item>
+        </el-form>
+
+        <AgentLogPanel
+          v-if="agentTaskId"
+          :key="agentTaskId"
+          :task-id="agentTaskId"
+          :initial-status="logPanelStatus"
+          :initial-logs="logPanelLogs"
+          :initial-start-time="currentExecution?.startTimeMs"
+        />
+      </div>
+
+      <template #footer>
+        <div class="agent-dialog-footer">
+          <div class="footer-left-actions">
+            <el-button
+              v-if="agentExecuting"
+              type="danger"
+              size="small"
+              @click="handleAgentCancel"
+            >
+              <el-icon><CircleClose /></el-icon>
+              取消执行
+            </el-button>
+            <el-button
+              v-if="currentExecution && !agentExecuting"
+              size="small"
+              @click="handleClearExecution"
+            >
+              清除记录
+            </el-button>
+          </div>
+          <div class="footer-right-actions">
+            <el-button @click="agentDialogVisible = false">
+              关闭
+            </el-button>
+            <template v-if="!agentExecuting">
+              <el-button type="primary" @click="handleAgentExecute(false)">
+                <el-icon><VideoPlay /></el-icon>
+                开始执行
+              </el-button>
+              <el-button type="success" @click="handleAgentExecute(true)">
+                <el-icon><Position /></el-icon>
+                后台执行
+              </el-button>
+            </template>
+          </div>
+        </div>
+      </template>
+    </el-dialog>
 
     <!-- 图片预览 -->
     <el-image-viewer
@@ -293,10 +510,20 @@ onBeforeUnmount(() => {
 
 .window-footer {
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
+  justify-content: space-between;
+  align-items: center;
   padding: 12px 16px;
   border-top: 1px solid var(--border, #e2e8f0);
+}
+
+.footer-left {
+  display: flex;
+  gap: 8px;
+}
+
+.footer-right {
+  display: flex;
+  gap: 8px;
 }
 
 .form-field {
@@ -397,5 +624,28 @@ onBeforeUnmount(() => {
   border: none;
   border-top: 1px solid #e2e8f0;
   margin: 1em 0;
+}
+</style>
+
+<style>
+.agent-exec-dialog .el-dialog__body {
+  padding-top: 12px;
+}
+.agent-exec-dialog .el-dialog__footer {
+  padding-top: 12px;
+}
+.agent-dialog-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+.agent-dialog-footer .footer-left-actions {
+  display: flex;
+  gap: 8px;
+}
+.agent-dialog-footer .footer-right-actions {
+  display: flex;
+  gap: 8px;
 }
 </style>

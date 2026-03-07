@@ -1,10 +1,10 @@
-use tauri::{Emitter, State};
-use tokio::sync::mpsc;
+use tauri::State;
 
 use crate::db::agent_db;
 use crate::db::models::{AgentConfig, AgentHealthStatus, CreateAgentRequest, UpdateAgentRequest};
 use crate::db::Database;
-use crate::services::agent::{encrypt_api_key, AgentEvent, AgentManager, AgentOutput};
+use crate::services::agent::{encrypt_api_key, AgentManager};
+use crate::services::agent::runner::ExecutionState;
 
 #[tauri::command]
 pub fn get_agents(db: State<'_, Database>) -> Result<Vec<AgentConfig>, String> {
@@ -85,7 +85,7 @@ pub async fn check_all_agents_health(
 }
 
 #[tauri::command]
-pub async fn execute_agent(
+pub async fn start_agent_execution(
     app: tauri::AppHandle,
     db: State<'_, Database>,
     agent_manager: State<'_, AgentManager>,
@@ -93,7 +93,7 @@ pub async fn execute_agent(
     prompt: String,
     project_path: String,
     task_id: String,
-) -> Result<AgentOutput, String> {
+) -> Result<(), String> {
     let config = db
         .with_connection(|conn| agent_db::get_agent_by_id(conn, agent_id))
         .map_err(|e| e.to_string())?;
@@ -102,22 +102,17 @@ pub async fn execute_agent(
         return Err("Agent 已禁用".to_string());
     }
 
-    let event_name = format!("agent:log:{}", task_id);
-    let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
+    agent_manager
+        .start_background_execution(config, prompt, project_path, task_id, app)
+        .await
+}
 
-    let app_clone = app.clone();
-    let event_name_clone = event_name.clone();
-    tokio::spawn(async move {
-        while let Some(event) = rx.recv().await {
-            let _ = app_clone.emit(&event_name_clone, &event);
-        }
-    });
-
-    let output = agent_manager
-        .execute(&config, &prompt, &project_path, &task_id, tx)
-        .await?;
-
-    Ok(output)
+#[tauri::command]
+pub async fn get_agent_execution_state(
+    agent_manager: State<'_, AgentManager>,
+    task_id: String,
+) -> Result<Option<ExecutionState>, String> {
+    Ok(agent_manager.get_execution_state(&task_id).await)
 }
 
 #[tauri::command]

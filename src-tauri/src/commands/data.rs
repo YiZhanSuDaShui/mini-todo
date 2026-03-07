@@ -23,7 +23,8 @@ pub fn export_data_internal(db: &Database) -> Result<String, String> {
     let result = db.with_connection(|conn| {
         let mut stmt = conn.prepare(
             "SELECT id, title, description, color, quadrant, notify_at, notify_before, 
-                    notified, completed, sort_order, start_time, end_time, created_at, updated_at 
+                    notified, completed, sort_order, start_time, end_time, created_at, updated_at,
+                    agent_id, agent_project_path
              FROM todos ORDER BY sort_order ASC",
         )?;
 
@@ -43,6 +44,8 @@ pub fn export_data_internal(db: &Database) -> Result<String, String> {
                 end_time: row.get(11)?,
                 created_at: row.get(12)?,
                 updated_at: row.get(13)?,
+                agent_id: row.get(14)?,
+                agent_project_path: row.get(15)?,
                 subtasks: Vec::new(),
             })
         })?;
@@ -203,10 +206,10 @@ pub fn import_data_raw(db: &Database, json_data: &str) -> Result<(), String> {
 #[tauri::command]
 pub fn export_data(db: State<Database>) -> Result<String, String> {
     let result = db.with_connection(|conn| {
-        // 获取所有待办和子任务
         let mut stmt = conn.prepare(
             "SELECT id, title, description, color, quadrant, notify_at, notify_before, 
-                    notified, completed, sort_order, start_time, end_time, created_at, updated_at 
+                    notified, completed, sort_order, start_time, end_time, created_at, updated_at,
+                    agent_id, agent_project_path
              FROM todos ORDER BY sort_order ASC",
         )?;
 
@@ -226,6 +229,8 @@ pub fn export_data(db: State<Database>) -> Result<String, String> {
                 end_time: row.get(11)?,
                 created_at: row.get(12)?,
                 updated_at: row.get(13)?,
+                agent_id: row.get(14)?,
+                agent_project_path: row.get(15)?,
                 subtasks: Vec::new(),
             })
         })?;

@@ -1,9 +1,10 @@
-use tauri::State;
+use tauri::{Emitter, State};
+use tokio::sync::mpsc;
 
 use crate::db::agent_db;
 use crate::db::models::{AgentConfig, AgentHealthStatus, CreateAgentRequest, UpdateAgentRequest};
 use crate::db::Database;
-use crate::services::agent::{encrypt_api_key, AgentManager};
+use crate::services::agent::{encrypt_api_key, AgentEvent, AgentManager, AgentOutput};
 
 #[tauri::command]
 pub fn get_agents(db: State<'_, Database>) -> Result<Vec<AgentConfig>, String> {
@@ -81,4 +82,48 @@ pub async fn check_all_agents_health(
         results.push(agent_manager.check_health(agent).await);
     }
     Ok(results)
+}
+
+#[tauri::command]
+pub async fn execute_agent(
+    app: tauri::AppHandle,
+    db: State<'_, Database>,
+    agent_manager: State<'_, AgentManager>,
+    agent_id: i64,
+    prompt: String,
+    project_path: String,
+    task_id: String,
+) -> Result<AgentOutput, String> {
+    let config = db
+        .with_connection(|conn| agent_db::get_agent_by_id(conn, agent_id))
+        .map_err(|e| e.to_string())?;
+
+    if !config.enabled {
+        return Err("Agent 已禁用".to_string());
+    }
+
+    let event_name = format!("agent:log:{}", task_id);
+    let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
+
+    let app_clone = app.clone();
+    let event_name_clone = event_name.clone();
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            let _ = app_clone.emit(&event_name_clone, &event);
+        }
+    });
+
+    let output = agent_manager
+        .execute(&config, &prompt, &project_path, &task_id, tx)
+        .await?;
+
+    Ok(output)
+}
+
+#[tauri::command]
+pub async fn cancel_agent_execution(
+    agent_manager: State<'_, AgentManager>,
+    task_id: String,
+) -> Result<(), String> {
+    agent_manager.cancel_execution(&task_id).await
 }

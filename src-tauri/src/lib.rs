@@ -59,10 +59,12 @@ use commands::{
     webdav_test_connection,
     webdav_upload_sync,
     // Agent 命令
+    cancel_agent_execution,
     check_agent_health,
     check_all_agents_health,
     create_agent,
     delete_agent,
+    execute_agent,
     get_agent,
     get_agents,
     update_agent,
@@ -335,6 +337,8 @@ pub fn run() {
             delete_agent,
             check_agent_health,
             check_all_agents_health,
+            execute_agent,
+            cancel_agent_execution,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

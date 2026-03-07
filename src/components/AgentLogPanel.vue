@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, nextTick, onBeforeUnmount, watch } from 'vue'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { AgentEvent } from '@/types/agent'
 
 const props = defineProps<{
@@ -91,17 +92,42 @@ function formatElapsed(secs: number): string {
   return m > 0 ? `${m}m ${s}s` : `${s}s`
 }
 
-watch(() => props.taskId, () => {
+let unlisten: UnlistenFn | null = null
+
+async function startListening(taskId: string) {
+  if (unlisten) {
+    unlisten()
+    unlisten = null
+  }
+  unlisten = await listen<AgentEvent>(`agent:log:${taskId}`, (event) => {
+    handleEvent(event.payload)
+  })
+}
+
+function stopListening() {
+  if (unlisten) {
+    unlisten()
+    unlisten = null
+  }
+}
+
+watch(() => props.taskId, async (newId) => {
   clearLog()
   status.value = 'idle'
   elapsed.value = 0
+  if (newId) {
+    await startListening(newId)
+  } else {
+    stopListening()
+  }
 })
 
 onBeforeUnmount(() => {
   stopTimer()
+  stopListening()
 })
 
-defineExpose({ handleEvent, appendLog, startExecution, clearLog })
+defineExpose({ handleEvent, appendLog, startExecution, clearLog, startListening, stopListening })
 </script>
 
 <template>

@@ -6,6 +6,7 @@ import type {
   CreateAgentRequest,
   UpdateAgentRequest,
   AgentHealthStatus,
+  AgentEvent,
 } from '@/types/agent'
 
 export const useAgentStore = defineStore('agent', () => {
@@ -65,6 +66,35 @@ export const useAgentStore = defineStore('agent', () => {
     return healthStatuses.value.get(id)
   }
 
+  interface ExecutionResult {
+    textResponse: string
+    inputTokens?: number
+    outputTokens?: number
+    estimatedCostUsd?: number
+    modelUsed?: string
+    sessionId?: string
+    exitCode: number
+    durationMs: number
+  }
+
+  async function executeAgent(
+    agentId: number,
+    prompt: string,
+    projectPath: string,
+    taskId: string,
+  ): Promise<ExecutionResult> {
+    return await invoke<ExecutionResult>('execute_agent', {
+      agentId,
+      prompt,
+      projectPath,
+      taskId,
+    })
+  }
+
+  async function cancelExecution(taskId: string) {
+    await invoke('cancel_agent_execution', { taskId })
+  }
+
   return {
     agents,
     healthStatuses,
@@ -78,5 +108,7 @@ export const useAgentStore = defineStore('agent', () => {
     checkHealth,
     checkAllHealth,
     getHealthStatus,
+    executeAgent,
+    cancelExecution,
   }
 })

@@ -120,9 +120,10 @@ impl AgentRunner for ClaudeCodeRunner {
 
         let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let version = raw
-            .rsplit_once(' ')
-            .map(|(_, ver)| ver.to_string())
-            .unwrap_or(raw);
+            .split_whitespace()
+            .next()
+            .unwrap_or(&raw)
+            .to_string();
         Ok(version)
     }
 

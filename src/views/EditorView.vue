@@ -509,14 +509,15 @@ function handleInlineEditKeydown(e: KeyboardEvent, subtaskId: number) {
   }
 }
 
-// 打开子任务查看窗口（只读模式）
-async function openSubtaskViewWindow(subtaskId: number) {
+async function openSubtaskWindow(subtaskId: number, mode: 'edit' | 'view') {
   if (isSubtaskEditorOpen.value) return
 
   const agentId = agentForm.value.agentId ?? todo.value?.agentId ?? ''
   const agentPath = encodeURIComponent(agentForm.value.projectPath || todo.value?.agentProjectPath || '')
-  const url = `#/subtask-editor?id=${subtaskId}&agentId=${agentId}&agentProjectPath=${agentPath}&mode=view`
-  const label = `subtask-viewer-${Date.now()}`
+  const modeParam = mode === 'view' ? '&mode=view' : ''
+  const url = `#/subtask-editor?id=${subtaskId}&agentId=${agentId}&agentProjectPath=${agentPath}${modeParam}`
+  const label = `subtask-${mode}-${Date.now()}`
+  const isEditMode = mode === 'edit'
 
   try {
     isSubtaskEditorOpen.value = true
@@ -544,7 +545,7 @@ async function openSubtaskViewWindow(subtaskId: number) {
 
     const webview = new WebviewWindow(label, {
       url,
-      title: '查看子任务',
+      title: isEditMode ? '编辑子任务' : '查看子任务',
       width: windowWidth,
       height: windowHeight,
       x,
@@ -557,6 +558,7 @@ async function openSubtaskViewWindow(subtaskId: number) {
 
     webview.once('tauri://destroyed', async () => {
       isSubtaskEditorOpen.value = false
+      if (isEditMode) await loadTodo()
     })
 
     webview.once('tauri://error', () => {
@@ -564,67 +566,7 @@ async function openSubtaskViewWindow(subtaskId: number) {
     })
   } catch (e) {
     isSubtaskEditorOpen.value = false
-    console.error('Failed to open subtask viewer:', e)
-  }
-}
-
-// 打开子任务编辑独立窗口（仅编辑模式，子任务已持久化）
-async function openSubtaskEditorWindow(subtaskId: number) {
-  if (isSubtaskEditorOpen.value) return
-
-  const agentId = agentForm.value.agentId ?? todo.value?.agentId ?? ''
-  const agentPath = encodeURIComponent(agentForm.value.projectPath || todo.value?.agentProjectPath || '')
-  const url = `#/subtask-editor?id=${subtaskId}&agentId=${agentId}&agentProjectPath=${agentPath}`
-  const label = `subtask-editor-${Date.now()}`
-
-  try {
-    isSubtaskEditorOpen.value = true
-
-    const windowWidth = 800
-    const windowHeight = 750
-    let x: number, y: number
-
-    const monitor = await currentMonitor() || await primaryMonitor()
-    if (monitor) {
-      const s = monitor.scaleFactor
-      const mx = monitor.position.x / s
-      const my = monitor.position.y / s
-      const mw = monitor.size.width / s
-      const mh = monitor.size.height / s
-      x = Math.round(mx + (mw - windowWidth) / 2)
-      y = Math.round(my + (mh - windowHeight) / 2)
-    } else {
-      const s = await appWindow.scaleFactor()
-      const pos = await appWindow.outerPosition()
-      const size = await appWindow.outerSize()
-      x = Math.round(pos.x / s + (size.width / s - windowWidth) / 2)
-      y = Math.round(pos.y / s + (size.height / s - windowHeight) / 2)
-    }
-
-    const webview = new WebviewWindow(label, {
-      url,
-      title: '编辑子任务',
-      width: windowWidth,
-      height: windowHeight,
-      x,
-      y,
-      resizable: true,
-      decorations: false,
-      transparent: false,
-      parent: appWindow,
-    })
-
-    webview.once('tauri://destroyed', async () => {
-      isSubtaskEditorOpen.value = false
-      await loadTodo()
-    })
-
-    webview.once('tauri://error', () => {
-      isSubtaskEditorOpen.value = false
-    })
-  } catch (e) {
-    isSubtaskEditorOpen.value = false
-    console.error('Failed to open subtask editor:', e)
+    console.error(`Failed to open subtask ${mode}:`, e)
   }
 }
 
@@ -1015,7 +957,7 @@ function handleClose() {
                 <div v-if="inlineEditingSubtaskId !== subtask.id" class="subtask-actions">
                   <button
                     class="action-btn view-btn"
-                    @click="openSubtaskViewWindow(subtask.id)"
+                    @click="openSubtaskWindow(subtask.id, 'view')"
                     title="查看子任务"
                   >
                     <el-icon><View /></el-icon>
@@ -1023,7 +965,7 @@ function handleClose() {
                   <button 
                     v-if="isEdit"
                     class="action-btn edit-btn"
-                    @click="openSubtaskEditorWindow(subtask.id)"
+                    @click="openSubtaskWindow(subtask.id, 'edit')"
                     title="编辑子任务"
                   >
                     <el-icon><Edit /></el-icon>

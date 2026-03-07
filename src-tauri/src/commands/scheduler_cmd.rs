@@ -22,7 +22,7 @@ pub fn update_subtask_schedule_status(
             .map_err(|_| rusqlite::Error::QueryReturnedNoRows)?;
 
         let new_status = state_machine::try_transition(&current, &target_status)
-            .map_err(|_| rusqlite::Error::QueryReturnedNoRows)?;
+            .map_err(|e| rusqlite::Error::InvalidParameterName(e))?;
 
         scheduler_db::update_schedule_status(conn, subtask_id, &new_status)?;
 

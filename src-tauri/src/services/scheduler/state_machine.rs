@@ -49,6 +49,8 @@ pub fn can_transition(from: &ScheduleStatus, to: &ScheduleStatus) -> bool {
         (from, to),
         // none -> pending: 任务被提交到调度
         (ScheduleStatus::None, ScheduleStatus::Pending) |
+        // pending -> none: 撤回提交，回到初始
+        (ScheduleStatus::Pending, ScheduleStatus::None) |
         // pending -> queued: 调度器拾取到队列
         (ScheduleStatus::Pending, ScheduleStatus::Queued) |
         // pending -> cancelled: 取消未排队的任务

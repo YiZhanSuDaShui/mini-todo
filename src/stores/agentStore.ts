@@ -153,6 +153,7 @@ export const useAgentStore = defineStore('agent', () => {
       prompt,
       projectPath,
       taskId,
+      subtaskId,
     })
   }
 
@@ -171,6 +172,57 @@ export const useAgentStore = defineStore('agent', () => {
 
   async function fetchExecutionState(taskId: string): Promise<ExecutionState | null> {
     return await invoke<ExecutionState | null>('get_agent_execution_state', { taskId })
+  }
+
+  async function restoreExecutionForSubtask(subtaskId: number): Promise<ExecutionInfo | null> {
+    const existing = activeExecutions.get(subtaskId)
+    if (existing) return existing
+
+    const state = await invoke<ExecutionState | null>('get_agent_execution_by_subtask', { subtaskId })
+    if (!state) return null
+
+    const info: ExecutionInfo = {
+      taskId: state.taskId,
+      subtaskId,
+      agentId: 0,
+      status: state.status as ExecutionInfo['status'],
+      logs: state.logs || [],
+      startTimeMs: state.startTimeMs,
+      durationMs: state.durationMs,
+      error: state.error,
+    }
+    activeExecutions.set(subtaskId, info)
+
+    if (state.status === 'running') {
+      const unlisten = await listen<AgentEvent>(`agent:log:${state.taskId}`, (event) => {
+        const exec = activeExecutions.get(subtaskId)
+        if (!exec) return
+        const payload = event.payload
+        switch (payload.kind) {
+          case 'Log':
+            exec.logs.push({
+              content: payload.content || '',
+              level: payload.level || 'stdout',
+              timestampMs: Date.now(),
+            })
+            break
+          case 'Completed':
+            exec.status = 'completed'
+            exec.durationMs = Date.now() - exec.startTimeMs
+            cleanupListener(state.taskId)
+            break
+          case 'Failed':
+            exec.status = 'failed'
+            exec.error = payload.error
+            exec.durationMs = Date.now() - exec.startTimeMs
+            cleanupListener(state.taskId)
+            break
+        }
+      })
+      eventListeners.set(state.taskId, unlisten)
+    }
+
+    return info
   }
 
   function removeExecution(subtaskId: number) {
@@ -199,6 +251,7 @@ export const useAgentStore = defineStore('agent', () => {
     startBackgroundExecution,
     cancelExecution,
     fetchExecutionState,
+    restoreExecutionForSubtask,
     removeExecution,
   }
 })

@@ -93,6 +93,7 @@ pub async fn start_agent_execution(
     prompt: String,
     project_path: String,
     task_id: String,
+    subtask_id: Option<i64>,
 ) -> Result<(), String> {
     let config = db
         .with_connection(|conn| agent_db::get_agent_by_id(conn, agent_id))
@@ -103,7 +104,7 @@ pub async fn start_agent_execution(
     }
 
     agent_manager
-        .start_background_execution(config, prompt, project_path, task_id, app)
+        .start_background_execution(config, prompt, project_path, task_id, subtask_id, app)
         .await
 }
 
@@ -113,6 +114,14 @@ pub async fn get_agent_execution_state(
     task_id: String,
 ) -> Result<Option<ExecutionState>, String> {
     Ok(agent_manager.get_execution_state(&task_id).await)
+}
+
+#[tauri::command]
+pub async fn get_agent_execution_by_subtask(
+    agent_manager: State<'_, AgentManager>,
+    subtask_id: i64,
+) -> Result<Option<ExecutionState>, String> {
+    Ok(agent_manager.get_execution_by_subtask(subtask_id).await)
 }
 
 #[tauri::command]

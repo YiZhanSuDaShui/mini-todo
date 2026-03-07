@@ -279,6 +279,7 @@ onMounted(async () => {
   await initEditor()
   editorContainer.value?.addEventListener('click', handleImageClick)
   agentStore.loadAgents()
+  agentStore.restoreExecutionForSubtask(subtaskId)
 })
 
 onBeforeUnmount(() => {

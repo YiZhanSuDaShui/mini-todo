@@ -282,6 +282,7 @@ pub trait AgentRunner: Send + Sync {
 #[serde(rename_all = "camelCase")]
 pub struct ExecutionState {
     pub task_id: String,
+    pub subtask_id: Option<i64>,
     pub status: String,
     pub logs: Vec<CachedLog>,
     pub result: Option<AgentOutput>,
@@ -325,6 +326,7 @@ impl AgentManager {
         prompt: String,
         project_path: String,
         task_id: String,
+        subtask_id: Option<i64>,
         app: tauri::AppHandle,
     ) -> Result<(), String> {
         let runner = self
@@ -368,6 +370,7 @@ impl AgentManager {
 
         let state = ExecutionState {
             task_id: task_id.clone(),
+            subtask_id,
             status: "running".to_string(),
             logs: Vec::new(),
             result: None,
@@ -619,6 +622,15 @@ impl AgentManager {
 
     pub async fn get_execution_state(&self, task_id: &str) -> Option<ExecutionState> {
         self.execution_states.lock().await.get(task_id).cloned()
+    }
+
+    pub async fn get_execution_by_subtask(&self, subtask_id: i64) -> Option<ExecutionState> {
+        let states = self.execution_states.lock().await;
+        states
+            .values()
+            .filter(|s| s.subtask_id == Some(subtask_id))
+            .max_by_key(|s| s.start_time_ms)
+            .cloned()
     }
 
     fn api_key_env_var(&self, agent_type: &str) -> &str {

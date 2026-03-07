@@ -71,6 +71,16 @@ use commands::{
     get_agents,
     start_agent_execution,
     update_agent,
+    // 调度器命令
+    add_task_dependency,
+    check_dependencies_met,
+    get_task_dependencies,
+    remove_task_dependency,
+    update_subtask_max_retries,
+    update_subtask_priority,
+    update_subtask_schedule_status,
+    update_subtask_timeout,
+    update_todo_schedule_config,
 };
 
 #[cfg(target_os = "windows")]
@@ -345,6 +355,16 @@ pub fn run() {
             get_agent_execution_state,
             get_agent_execution_by_subtask,
             cancel_agent_execution,
+            // 调度器命令
+            update_subtask_schedule_status,
+            update_subtask_priority,
+            update_subtask_timeout,
+            update_subtask_max_retries,
+            add_task_dependency,
+            remove_task_dependency,
+            get_task_dependencies,
+            check_dependencies_met,
+            update_todo_schedule_config,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

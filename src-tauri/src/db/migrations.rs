@@ -78,6 +78,21 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("INSERT INTO migrations (version) VALUES (12)", [])?;
     }
 
+    if current_version < 13 {
+        migration_v13(conn)?;
+        conn.execute("INSERT INTO migrations (version) VALUES (13)", [])?;
+    }
+
+    if current_version < 14 {
+        migration_v14(conn)?;
+        conn.execute("INSERT INTO migrations (version) VALUES (14)", [])?;
+    }
+
+    if current_version < 15 {
+        migration_v15(conn)?;
+        conn.execute("INSERT INTO migrations (version) VALUES (15)", [])?;
+    }
+
     Ok(())
 }
 
@@ -114,6 +129,48 @@ fn migration_v12(conn: &Connection) -> Result<()> {
         [],
     )?;
     Ok(())
+}
+
+/// 迁移 v13：扩展 subtasks 表增加调度相关字段。
+fn migration_v13(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "ALTER TABLE subtasks ADD COLUMN schedule_status TEXT NOT NULL DEFAULT 'none';
+         ALTER TABLE subtasks ADD COLUMN priority_score INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE subtasks ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE subtasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE subtasks ADD COLUMN timeout_secs INTEGER NOT NULL DEFAULT 600;
+         ALTER TABLE subtasks ADD COLUMN scheduled_at TEXT;
+         ALTER TABLE subtasks ADD COLUMN last_scheduled_run TEXT;
+         ALTER TABLE subtasks ADD COLUMN schedule_error TEXT;
+         CREATE INDEX IF NOT EXISTS idx_subtasks_schedule_status ON subtasks(schedule_status);"
+    )
+}
+
+/// 迁移 v14：扩展 todos 表增加调度策略字段。
+fn migration_v14(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "ALTER TABLE todos ADD COLUMN schedule_strategy TEXT NOT NULL DEFAULT 'manual';
+         ALTER TABLE todos ADD COLUMN cron_expression TEXT;
+         ALTER TABLE todos ADD COLUMN schedule_enabled INTEGER NOT NULL DEFAULT 0;"
+    )
+}
+
+/// 迁移 v15：创建任务依赖关系表。
+fn migration_v15(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS task_dependencies (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            subtask_id      INTEGER NOT NULL,
+            depends_on_id   INTEGER NOT NULL,
+            dependency_type TEXT    NOT NULL DEFAULT 'finish-to-start',
+            created_at      TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+            FOREIGN KEY (subtask_id) REFERENCES subtasks(id) ON DELETE CASCADE,
+            FOREIGN KEY (depends_on_id) REFERENCES subtasks(id) ON DELETE CASCADE,
+            UNIQUE(subtask_id, depends_on_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_deps_subtask ON task_dependencies(subtask_id);
+        CREATE INDEX IF NOT EXISTS idx_task_deps_depends ON task_dependencies(depends_on_id);"
+    )
 }
 
 /// 迁移 v10：简化 agent_configs 表，移除不再需要的字段。

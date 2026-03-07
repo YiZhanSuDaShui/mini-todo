@@ -1,4 +1,61 @@
+use rusqlite::Row;
 use serde::{Deserialize, Serialize};
+
+pub const SUBTASK_COLUMNS: &str =
+    "id, parent_id, title, content, completed, sort_order, created_at, updated_at,
+     schedule_status, priority_score, max_retries, retry_count, timeout_secs,
+     scheduled_at, last_scheduled_run, schedule_error";
+
+pub const TODO_COLUMNS: &str =
+    "id, title, description, color, quadrant, notify_at, notify_before,
+     notified, completed, sort_order, start_time, end_time, created_at, updated_at,
+     agent_id, agent_project_path, schedule_strategy, cron_expression, schedule_enabled";
+
+pub fn subtask_from_row(row: &Row) -> rusqlite::Result<SubTask> {
+    Ok(SubTask {
+        id: row.get(0)?,
+        parent_id: row.get(1)?,
+        title: row.get(2)?,
+        content: row.get(3)?,
+        completed: row.get::<_, i32>(4)? != 0,
+        sort_order: row.get(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
+        schedule_status: row.get::<_, String>(8).unwrap_or_else(|_| "none".to_string()),
+        priority_score: row.get(9).unwrap_or(0),
+        max_retries: row.get(10).unwrap_or(0),
+        retry_count: row.get(11).unwrap_or(0),
+        timeout_secs: row.get(12).unwrap_or(600),
+        scheduled_at: row.get(13).unwrap_or(None),
+        last_scheduled_run: row.get(14).unwrap_or(None),
+        schedule_error: row.get(15).unwrap_or(None),
+    })
+}
+
+pub fn todo_from_row(row: &Row) -> rusqlite::Result<Todo> {
+    Ok(Todo {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        description: row.get(2)?,
+        color: row.get(3)?,
+        quadrant: row.get(4)?,
+        notify_at: row.get(5)?,
+        notify_before: row.get(6)?,
+        notified: row.get::<_, i32>(7)? != 0,
+        completed: row.get::<_, i32>(8)? != 0,
+        sort_order: row.get(9)?,
+        start_time: row.get(10)?,
+        end_time: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
+        agent_id: row.get(14)?,
+        agent_project_path: row.get(15)?,
+        schedule_strategy: row.get::<_, String>(16).unwrap_or_else(|_| "manual".to_string()),
+        cron_expression: row.get(17).unwrap_or(None),
+        schedule_enabled: row.get::<_, i32>(18).unwrap_or(0) != 0,
+        subtasks: Vec::new(),
+    })
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,8 +82,18 @@ pub struct Todo {
     pub agent_id: Option<i64>,
     /// Agent 工作的项目目录（可为空）
     pub agent_project_path: Option<String>,
+    #[serde(default = "default_schedule_strategy")]
+    pub schedule_strategy: String,
+    #[serde(default)]
+    pub cron_expression: Option<String>,
+    #[serde(default)]
+    pub schedule_enabled: bool,
     #[serde(default)]
     pub subtasks: Vec<SubTask>,
+}
+
+fn default_schedule_strategy() -> String {
+    "manual".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +107,30 @@ pub struct SubTask {
     pub sort_order: i32,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default = "default_schedule_status")]
+    pub schedule_status: String,
+    #[serde(default)]
+    pub priority_score: i64,
+    #[serde(default)]
+    pub max_retries: i64,
+    #[serde(default)]
+    pub retry_count: i64,
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: i64,
+    #[serde(default)]
+    pub scheduled_at: Option<String>,
+    #[serde(default)]
+    pub last_scheduled_run: Option<String>,
+    #[serde(default)]
+    pub schedule_error: Option<String>,
+}
+
+fn default_schedule_status() -> String {
+    "none".to_string()
+}
+
+fn default_timeout_secs() -> i64 {
+    600
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -218,6 +309,18 @@ pub struct SaveScreenConfigRequest {
     pub window_width: i32,
     pub window_height: i32,
     pub is_fixed: bool,
+}
+
+// ========== 任务调度相关模型 ==========
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskDependency {
+    pub id: i64,
+    pub subtask_id: i64,
+    pub depends_on_id: i64,
+    pub dependency_type: String,
+    pub created_at: String,
 }
 
 // ========== Agent 集成相关模型 ==========

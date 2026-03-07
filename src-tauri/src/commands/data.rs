@@ -1,4 +1,7 @@
-use crate::db::{AppSettings, Database, ExportData, SubTask, Todo, WindowPosition, WindowSize};
+use crate::db::{
+    AppSettings, Database, ExportData, Todo, WindowPosition, WindowSize,
+    subtask_from_row, todo_from_row, SUBTASK_COLUMNS, TODO_COLUMNS,
+};
 use chrono::Local;
 use tauri::State;
 
@@ -21,55 +24,19 @@ fn get_setting_bool(conn: &rusqlite::Connection, key: &str, default: bool) -> bo
 
 pub fn export_data_internal(db: &Database) -> Result<String, String> {
     let result = db.with_connection(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT id, title, description, color, quadrant, notify_at, notify_before, 
-                    notified, completed, sort_order, start_time, end_time, created_at, updated_at,
-                    agent_id, agent_project_path
-             FROM todos ORDER BY sort_order ASC",
-        )?;
-
-        let todo_iter = stmt.query_map([], |row| {
-            Ok(Todo {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                description: row.get(2)?,
-                color: row.get(3)?,
-                quadrant: row.get(4)?,
-                notify_at: row.get(5)?,
-                notify_before: row.get(6)?,
-                notified: row.get::<_, i32>(7)? != 0,
-                completed: row.get::<_, i32>(8)? != 0,
-                sort_order: row.get(9)?,
-                start_time: row.get(10)?,
-                end_time: row.get(11)?,
-                created_at: row.get(12)?,
-                updated_at: row.get(13)?,
-                agent_id: row.get(14)?,
-                agent_project_path: row.get(15)?,
-                subtasks: Vec::new(),
-            })
-        })?;
+        let todo_sql = format!("SELECT {} FROM todos ORDER BY sort_order ASC", TODO_COLUMNS);
+        let mut stmt = conn.prepare(&todo_sql)?;
+        let todo_iter = stmt.query_map([], |row| todo_from_row(row))?;
 
         let mut todos: Vec<Todo> = todo_iter.filter_map(|t| t.ok()).collect();
 
         for todo in &mut todos {
-            let mut subtask_stmt = conn.prepare(
-                "SELECT id, parent_id, title, content, completed, sort_order, created_at, updated_at 
-                 FROM subtasks WHERE parent_id = ? ORDER BY sort_order ASC",
-            )?;
-
-            let subtask_iter = subtask_stmt.query_map([todo.id], |row| {
-                Ok(SubTask {
-                    id: row.get(0)?,
-                    parent_id: row.get(1)?,
-                    title: row.get(2)?,
-                    content: row.get(3)?,
-                    completed: row.get::<_, i32>(4)? != 0,
-                    sort_order: row.get(5)?,
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
-                })
-            })?;
+            let subtask_sql = format!(
+                "SELECT {} FROM subtasks WHERE parent_id = ? ORDER BY sort_order ASC",
+                SUBTASK_COLUMNS
+            );
+            let mut subtask_stmt = conn.prepare(&subtask_sql)?;
+            let subtask_iter = subtask_stmt.query_map([todo.id], |row| subtask_from_row(row))?;
 
             todo.subtasks = subtask_iter.filter_map(|s| s.ok()).collect();
         }
@@ -206,57 +173,19 @@ pub fn import_data_raw(db: &Database, json_data: &str) -> Result<(), String> {
 #[tauri::command]
 pub fn export_data(db: State<Database>) -> Result<String, String> {
     let result = db.with_connection(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT id, title, description, color, quadrant, notify_at, notify_before, 
-                    notified, completed, sort_order, start_time, end_time, created_at, updated_at,
-                    agent_id, agent_project_path
-             FROM todos ORDER BY sort_order ASC",
-        )?;
-
-        let todo_iter = stmt.query_map([], |row| {
-            Ok(Todo {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                description: row.get(2)?,
-                color: row.get(3)?,
-                quadrant: row.get(4)?,
-                notify_at: row.get(5)?,
-                notify_before: row.get(6)?,
-                notified: row.get::<_, i32>(7)? != 0,
-                completed: row.get::<_, i32>(8)? != 0,
-                sort_order: row.get(9)?,
-                start_time: row.get(10)?,
-                end_time: row.get(11)?,
-                created_at: row.get(12)?,
-                updated_at: row.get(13)?,
-                agent_id: row.get(14)?,
-                agent_project_path: row.get(15)?,
-                subtasks: Vec::new(),
-            })
-        })?;
+        let todo_sql = format!("SELECT {} FROM todos ORDER BY sort_order ASC", TODO_COLUMNS);
+        let mut stmt = conn.prepare(&todo_sql)?;
+        let todo_iter = stmt.query_map([], |row| todo_from_row(row))?;
 
         let mut todos: Vec<Todo> = todo_iter.filter_map(|t| t.ok()).collect();
 
-        // 获取每个待办的子任务
         for todo in &mut todos {
-            let mut subtask_stmt = conn.prepare(
-                "SELECT id, parent_id, title, content, completed, sort_order, created_at, updated_at 
-                 FROM subtasks WHERE parent_id = ? ORDER BY sort_order ASC",
-            )?;
-
-            let subtask_iter = subtask_stmt.query_map([todo.id], |row| {
-                Ok(SubTask {
-                    id: row.get(0)?,
-                    parent_id: row.get(1)?,
-                    title: row.get(2)?,
-                    content: row.get(3)?,
-                    completed: row.get::<_, i32>(4)? != 0,
-                    sort_order: row.get(5)?,
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
-                })
-            })?;
-
+            let subtask_sql = format!(
+                "SELECT {} FROM subtasks WHERE parent_id = ? ORDER BY sort_order ASC",
+                SUBTASK_COLUMNS
+            );
+            let mut subtask_stmt = conn.prepare(&subtask_sql)?;
+            let subtask_iter = subtask_stmt.query_map([todo.id], |row| subtask_from_row(row))?;
             todo.subtasks = subtask_iter.filter_map(|s| s.ok()).collect();
         }
 

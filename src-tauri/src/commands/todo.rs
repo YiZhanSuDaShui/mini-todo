@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose, Engine};
 use crate::db::{
     CreateSubTaskRequest, CreateTodoRequest, Database, SubTask, Todo, UpdateSubTaskRequest,
-    UpdateTodoRequest,
+    UpdateTodoRequest, subtask_from_row, todo_from_row, SUBTASK_COLUMNS, TODO_COLUMNS,
 };
 use std::path::PathBuf;
 use tauri::State;
@@ -10,59 +10,25 @@ use tauri::State;
 pub fn get_todos(db: State<Database>) -> Result<Vec<Todo>, String> {
     db.with_connection(|conn| {
         // 获取所有待办
-        let mut stmt = conn.prepare(
-            "SELECT id, title, description, color, quadrant, notify_at, notify_before, 
-                    notified, completed, sort_order, start_time, end_time, created_at, updated_at,
-                    agent_id, agent_project_path
-             FROM todos 
-             ORDER BY completed ASC, sort_order ASC, created_at DESC",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM todos ORDER BY completed ASC, sort_order ASC, created_at DESC",
+            TODO_COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
 
-        let todo_iter = stmt.query_map([], |row| {
-            Ok(Todo {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                description: row.get(2)?,
-                color: row.get(3)?,
-                quadrant: row.get(4)?,
-                notify_at: row.get(5)?,
-                notify_before: row.get(6)?,
-                notified: row.get::<_, i32>(7)? != 0,
-                completed: row.get::<_, i32>(8)? != 0,
-                sort_order: row.get(9)?,
-                start_time: row.get(10)?,
-                end_time: row.get(11)?,
-                created_at: row.get(12)?,
-                updated_at: row.get(13)?,
-                agent_id: row.get(14)?,
-                agent_project_path: row.get(15)?,
-                subtasks: Vec::new(),
-            })
-        })?;
+        let todo_iter = stmt.query_map([], |row| todo_from_row(row))?;
 
         let mut todos: Vec<Todo> = todo_iter.filter_map(|t| t.ok()).collect();
 
         // 获取每个待办的子任务
         for todo in &mut todos {
-            let mut subtask_stmt = conn.prepare(
-                "SELECT id, parent_id, title, content, completed, sort_order, created_at, updated_at 
-                 FROM subtasks 
-                 WHERE parent_id = ? 
-                 ORDER BY sort_order ASC",
-            )?;
+            let subtask_sql = format!(
+                "SELECT {} FROM subtasks WHERE parent_id = ? ORDER BY sort_order ASC",
+                SUBTASK_COLUMNS
+            );
+            let mut subtask_stmt = conn.prepare(&subtask_sql)?;
 
-            let subtask_iter = subtask_stmt.query_map([todo.id], |row| {
-                Ok(SubTask {
-                    id: row.get(0)?,
-                    parent_id: row.get(1)?,
-                    title: row.get(2)?,
-                    content: row.get(3)?,
-                    completed: row.get::<_, i32>(4)? != 0,
-                    sort_order: row.get(5)?,
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
-                })
-            })?;
+            let subtask_iter = subtask_stmt.query_map([todo.id], |row| subtask_from_row(row))?;
 
             todo.subtasks = subtask_iter.filter_map(|s| s.ok()).collect();
         }
@@ -104,34 +70,8 @@ pub fn create_todo(db: State<Database>, data: CreateTodoRequest) -> Result<Todo,
 
         let id = conn.last_insert_rowid();
 
-        conn.query_row(
-            "SELECT id, title, description, color, quadrant, notify_at, notify_before, 
-                    notified, completed, sort_order, start_time, end_time, created_at, updated_at,
-                    agent_id, agent_project_path
-             FROM todos WHERE id = ?",
-            [id],
-            |row| {
-                Ok(Todo {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    description: row.get(2)?,
-                    color: row.get(3)?,
-                    quadrant: row.get(4)?,
-                    notify_at: row.get(5)?,
-                    notify_before: row.get(6)?,
-                    notified: row.get::<_, i32>(7)? != 0,
-                    completed: row.get::<_, i32>(8)? != 0,
-                    sort_order: row.get(9)?,
-                    start_time: row.get(10)?,
-                    end_time: row.get(11)?,
-                    created_at: row.get(12)?,
-                    updated_at: row.get(13)?,
-                    agent_id: row.get(14)?,
-                    agent_project_path: row.get(15)?,
-                    subtasks: Vec::new(),
-                })
-            },
-        )
+        let sql = format!("SELECT {} FROM todos WHERE id = ?", TODO_COLUMNS);
+        conn.query_row(&sql, [id], |row| todo_from_row(row))
     })
     .map_err(|e| e.to_string())
 }
@@ -223,54 +163,15 @@ pub fn update_todo(db: State<Database>, id: i64, data: UpdateTodoRequest) -> Res
         let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         conn.execute(&sql, params_refs.as_slice())?;
 
-        let mut todo = conn.query_row(
-            "SELECT id, title, description, color, quadrant, notify_at, notify_before, 
-                    notified, completed, sort_order, start_time, end_time, created_at, updated_at,
-                    agent_id, agent_project_path
-             FROM todos WHERE id = ?",
-            [id],
-            |row| {
-                Ok(Todo {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    description: row.get(2)?,
-                    color: row.get(3)?,
-                    quadrant: row.get(4)?,
-                    notify_at: row.get(5)?,
-                    notify_before: row.get(6)?,
-                    notified: row.get::<_, i32>(7)? != 0,
-                    completed: row.get::<_, i32>(8)? != 0,
-                    sort_order: row.get(9)?,
-                    start_time: row.get(10)?,
-                    end_time: row.get(11)?,
-                    created_at: row.get(12)?,
-                    updated_at: row.get(13)?,
-                    agent_id: row.get(14)?,
-                    agent_project_path: row.get(15)?,
-                    subtasks: Vec::new(),
-                })
-            },
-        )?;
+        let todo_sql = format!("SELECT {} FROM todos WHERE id = ?", TODO_COLUMNS);
+        let mut todo = conn.query_row(&todo_sql, [id], |row| todo_from_row(row))?;
 
-        // 获取子任务
-        let mut subtask_stmt = conn.prepare(
-            "SELECT id, parent_id, title, content, completed, sort_order, created_at, updated_at 
-             FROM subtasks WHERE parent_id = ? ORDER BY sort_order ASC",
-        )?;
-
-        let subtask_iter = subtask_stmt.query_map([id], |row| {
-            Ok(SubTask {
-                id: row.get(0)?,
-                parent_id: row.get(1)?,
-                title: row.get(2)?,
-                content: row.get(3)?,
-                completed: row.get::<_, i32>(4)? != 0,
-                sort_order: row.get(5)?,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
-            })
-        })?;
-
+        let subtask_sql = format!(
+            "SELECT {} FROM subtasks WHERE parent_id = ? ORDER BY sort_order ASC",
+            SUBTASK_COLUMNS
+        );
+        let mut subtask_stmt = conn.prepare(&subtask_sql)?;
+        let subtask_iter = subtask_stmt.query_map([id], |row| subtask_from_row(row))?;
         todo.subtasks = subtask_iter.filter_map(|s| s.ok()).collect();
 
         Ok(todo)
@@ -320,23 +221,8 @@ pub fn create_subtask(db: State<Database>, data: CreateSubTaskRequest) -> Result
 
         let id = conn.last_insert_rowid();
 
-        conn.query_row(
-            "SELECT id, parent_id, title, content, completed, sort_order, created_at, updated_at 
-             FROM subtasks WHERE id = ?",
-            [id],
-            |row| {
-                Ok(SubTask {
-                    id: row.get(0)?,
-                    parent_id: row.get(1)?,
-                    title: row.get(2)?,
-                    content: row.get(3)?,
-                    completed: row.get::<_, i32>(4)? != 0,
-                    sort_order: row.get(5)?,
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
-                })
-            },
-        )
+        let sql = format!("SELECT {} FROM subtasks WHERE id = ?", SUBTASK_COLUMNS);
+        conn.query_row(&sql, [id], |row| subtask_from_row(row))
     })
     .map_err(|e| e.to_string())
 }
@@ -382,23 +268,8 @@ pub fn update_subtask(
         let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         conn.execute(&sql, params_refs.as_slice())?;
 
-        conn.query_row(
-            "SELECT id, parent_id, title, content, completed, sort_order, created_at, updated_at 
-             FROM subtasks WHERE id = ?",
-            [id],
-            |row| {
-                Ok(SubTask {
-                    id: row.get(0)?,
-                    parent_id: row.get(1)?,
-                    title: row.get(2)?,
-                    content: row.get(3)?,
-                    completed: row.get::<_, i32>(4)? != 0,
-                    sort_order: row.get(5)?,
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
-                })
-            },
-        )
+        let sql = format!("SELECT {} FROM subtasks WHERE id = ?", SUBTASK_COLUMNS);
+        conn.query_row(&sql, [id], |row| subtask_from_row(row))
     })
     .map_err(|e| e.to_string())
 }
@@ -406,23 +277,8 @@ pub fn update_subtask(
 #[tauri::command]
 pub fn get_subtask(db: State<Database>, id: i64) -> Result<SubTask, String> {
     db.with_connection(|conn| {
-        conn.query_row(
-            "SELECT id, parent_id, title, content, completed, sort_order, created_at, updated_at 
-             FROM subtasks WHERE id = ?",
-            [id],
-            |row| {
-                Ok(SubTask {
-                    id: row.get(0)?,
-                    parent_id: row.get(1)?,
-                    title: row.get(2)?,
-                    content: row.get(3)?,
-                    completed: row.get::<_, i32>(4)? != 0,
-                    sort_order: row.get(5)?,
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
-                })
-            },
-        )
+        let sql = format!("SELECT {} FROM subtasks WHERE id = ?", SUBTASK_COLUMNS);
+        conn.query_row(&sql, [id], |row| subtask_from_row(row))
     })
     .map_err(|e| e.to_string())
 }

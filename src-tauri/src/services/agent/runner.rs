@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use serde::Serialize;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
 use tokio::sync::Mutex;
@@ -551,7 +551,19 @@ impl AgentManager {
             .insert(task_id.clone(), state);
 
         let states = self.execution_states.clone();
-        let timeout_secs = 600u64;
+        let timeout_secs = if let Some(sid) = subtask_id {
+            let db = app.state::<Database>();
+            db.with_connection(|conn| {
+                conn.query_row(
+                    "SELECT timeout_secs FROM subtasks WHERE id = ?",
+                    [sid],
+                    |row| row.get::<_, i64>(0),
+                )
+            })
+            .unwrap_or(600) as u64
+        } else {
+            600u64
+        };
         let task_id_clone = task_id.clone();
         let event_name = format!("agent:log:{}", task_id);
         let agent_type_for_task = config.agent_type.clone();

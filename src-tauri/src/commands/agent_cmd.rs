@@ -3,8 +3,8 @@ use tauri::State;
 use crate::db::agent_db;
 use crate::db::models::{AgentConfig, AgentHealthStatus, CreateAgentRequest, UpdateAgentRequest};
 use crate::db::Database;
-use crate::services::agent::{encrypt_api_key, AgentManager};
-use crate::services::agent::runner::ExecutionState;
+use crate::services::agent::AgentManager;
+use crate::services::agent::runner::{create_command, ExecutionState};
 
 #[tauri::command]
 pub fn get_agents(db: State<'_, Database>) -> Result<Vec<AgentConfig>, String> {
@@ -23,13 +23,7 @@ pub fn create_agent(
     db: State<'_, Database>,
     request: CreateAgentRequest,
 ) -> Result<i64, String> {
-    let encrypted_key = if let Some(ref key) = request.api_key {
-        encrypt_api_key(key)?
-    } else {
-        String::new()
-    };
-
-    db.with_connection(|conn| agent_db::create_agent(conn, &request, &encrypted_key))
+    db.with_connection(|conn| agent_db::create_agent(conn, &request))
         .map_err(|e| e.to_string())
 }
 
@@ -39,13 +33,7 @@ pub fn update_agent(
     id: i64,
     request: UpdateAgentRequest,
 ) -> Result<(), String> {
-    let encrypted_key = match &request.api_key {
-        Some(key) if !key.is_empty() => Some(encrypt_api_key(key)?),
-        Some(_) => Some(String::new()),
-        None => None,
-    };
-
-    db.with_connection(|conn| agent_db::update_agent(conn, id, &request, encrypted_key.as_deref()))
+    db.with_connection(|conn| agent_db::update_agent(conn, id, &request))
         .map_err(|e| e.to_string())
 }
 
@@ -130,4 +118,70 @@ pub async fn cancel_agent_execution(
     task_id: String,
 ) -> Result<(), String> {
     agent_manager.cancel_execution(&task_id).await
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedAgent {
+    pub agent_type: String,
+    pub cli_path: String,
+    pub version: Option<String>,
+    pub available: bool,
+}
+
+#[tauri::command]
+pub async fn auto_detect_agents(
+    db: State<'_, Database>,
+) -> Result<Vec<DetectedAgent>, String> {
+    let known = vec![
+        ("claude_code", "claude", "Claude Code"),
+        ("codex", "codex", "Codex"),
+    ];
+
+    let mut detected = Vec::new();
+
+    for (agent_type, cli_name, display_name) in &known {
+        let output = create_command(cli_name)
+            .arg("--version")
+            .output();
+
+        let (available, version) = match output {
+            Ok(out) if out.status.success() => {
+                let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                let ver = raw
+                    .rsplit_once(' ')
+                    .map(|(_, v)| v.to_string())
+                    .unwrap_or(raw.clone());
+                (true, Some(ver))
+            }
+            _ => (false, None),
+        };
+
+        detected.push(DetectedAgent {
+            agent_type: agent_type.to_string(),
+            cli_path: cli_name.to_string(),
+            version: version.clone(),
+            available,
+        });
+
+        if available {
+            let existing = db.with_connection(|conn| {
+                agent_db::get_all_agents(conn)
+            }).unwrap_or_default();
+
+            let already_exists = existing.iter().any(|a| a.agent_type == *agent_type);
+            if !already_exists {
+                let request = CreateAgentRequest {
+                    name: display_name.to_string(),
+                    agent_type: agent_type.to_string(),
+                    cli_path: cli_name.to_string(),
+                };
+                let _ = db.with_connection(|conn| {
+                    agent_db::create_agent(conn, &request)
+                });
+            }
+        }
+    }
+
+    Ok(detected)
 }

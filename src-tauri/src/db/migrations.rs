@@ -63,7 +63,32 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("INSERT INTO migrations (version) VALUES (9)", [])?;
     }
 
+    if current_version < 10 {
+        migration_v10(conn)?;
+        conn.execute("INSERT INTO migrations (version) VALUES (10)", [])?;
+    }
+
     Ok(())
+}
+
+/// 迁移 v10：简化 agent_configs 表，移除不再需要的字段。
+/// 自动检测模式下 API key、sandbox 等由 CLI 自行管理。
+fn migration_v10(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE agent_configs_new (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            name            TEXT    NOT NULL,
+            agent_type      TEXT    NOT NULL CHECK(agent_type IN ('claude_code', 'codex', 'custom')),
+            cli_path        TEXT    NOT NULL DEFAULT '',
+            enabled         INTEGER NOT NULL DEFAULT 1,
+            created_at      TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+            updated_at      TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+        );
+        INSERT INTO agent_configs_new (id, name, agent_type, cli_path, enabled, created_at, updated_at)
+            SELECT id, name, agent_type, cli_path, enabled, created_at, updated_at FROM agent_configs;
+        DROP TABLE agent_configs;
+        ALTER TABLE agent_configs_new RENAME TO agent_configs;"
+    )
 }
 
 /// 迁移 v9：todos 表新增 agent_id 和 agent_project_path 字段，

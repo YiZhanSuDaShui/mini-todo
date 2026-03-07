@@ -59,6 +59,7 @@ use commands::{
     webdav_test_connection,
     webdav_upload_sync,
     // Agent 命令
+    auto_detect_agents,
     cancel_agent_execution,
     check_agent_health,
     check_all_agents_health,
@@ -339,6 +340,7 @@ pub fn run() {
             delete_agent,
             check_agent_health,
             check_all_agents_health,
+            auto_detect_agents,
             start_agent_execution,
             get_agent_execution_state,
             get_agent_execution_by_subtask,

@@ -229,21 +229,9 @@ pub struct AgentConfig {
     pub name: String,
     pub agent_type: String,
     pub cli_path: String,
-    pub cli_version: String,
-    pub min_cli_version: String,
-    #[serde(skip_serializing)]
-    pub api_key_encrypted: String,
-    pub default_model: String,
-    pub max_concurrent: i32,
-    pub timeout_seconds: i32,
-    pub capabilities: String,
-    pub env_vars: String,
-    pub sandbox_config: String,
     pub enabled: bool,
     pub created_at: String,
     pub updated_at: String,
-    #[serde(default)]
-    pub has_api_key: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -252,13 +240,6 @@ pub struct CreateAgentRequest {
     pub name: String,
     pub agent_type: String,
     pub cli_path: String,
-    pub api_key: Option<String>,
-    pub default_model: Option<String>,
-    pub max_concurrent: Option<i32>,
-    pub timeout_seconds: Option<i32>,
-    pub capabilities: Option<String>,
-    pub env_vars: Option<String>,
-    pub sandbox_config: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -267,13 +248,6 @@ pub struct UpdateAgentRequest {
     pub name: Option<String>,
     pub agent_type: Option<String>,
     pub cli_path: Option<String>,
-    pub api_key: Option<String>,
-    pub default_model: Option<String>,
-    pub max_concurrent: Option<i32>,
-    pub timeout_seconds: Option<i32>,
-    pub capabilities: Option<String>,
-    pub env_vars: Option<String>,
-    pub sandbox_config: Option<String>,
     pub enabled: Option<bool>,
 }
 
@@ -286,43 +260,4 @@ pub struct AgentHealthStatus {
     pub detected_version: Option<String>,
     pub version_compatible: bool,
     pub message: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct SandboxConfig {
-    #[serde(default = "default_worktree_enabled")]
-    pub enable_worktree_isolation: bool,
-    #[serde(default)]
-    pub protected_files: Vec<String>,
-    #[serde(default = "default_allowed_tools")]
-    pub allowed_tools: Vec<String>,
-    #[serde(default = "default_max_files")]
-    pub max_files_changed: i32,
-    #[serde(default = "default_max_lines")]
-    pub max_lines_changed: i32,
-    #[serde(default = "default_worktree_dir")]
-    pub worktree_base_dir: String,
-}
-
-fn default_worktree_enabled() -> bool {
-    true
-}
-fn default_allowed_tools() -> Vec<String> {
-    vec![
-        "Edit".into(),
-        "Write".into(),
-        "Read".into(),
-        "Glob".into(),
-        "Grep".into(),
-    ]
-}
-fn default_max_files() -> i32 {
-    50
-}
-fn default_max_lines() -> i32 {
-    5000
-}
-fn default_worktree_dir() -> String {
-    ".agent-worktrees".into()
 }

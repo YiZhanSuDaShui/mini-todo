@@ -9,12 +9,10 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
 use tokio::sync::Mutex;
 
-use crate::db::models::{AgentConfig, AgentHealthStatus, SandboxConfig};
+use crate::db::models::{AgentConfig, AgentHealthStatus};
 
 use super::claude_code::ClaudeCodeRunner;
 use super::codex::CodexRunner;
-use super::crypto;
-use super::worktree::WorktreeManager;
 
 /// 从 Windows 注册表读取完整的系统 + 用户 PATH，解决 Tauri GUI
 /// 进程启动时 PATH 不完整导致找不到 CLI 的问题。
@@ -334,34 +332,15 @@ impl AgentManager {
             .get(&config.agent_type)
             .ok_or_else(|| format!("不支持的 Agent 类型: {}", config.agent_type))?;
 
-        let api_key = crypto::decrypt_api_key(&config.api_key_encrypted)?;
-        let sandbox: SandboxConfig =
-            serde_json::from_str(&config.sandbox_config).unwrap_or_default();
-
-        let work_dir = if sandbox.enable_worktree_isolation {
-            match WorktreeManager::create(&project_path, &task_id) {
-                Ok(wt) => wt.path().to_string_lossy().to_string(),
-                Err(_) => project_path.clone(),
-            }
-        } else {
-            project_path.clone()
-        };
+        let work_dir = project_path.clone();
 
         let mut cmd = runner.build_command(
             &config.cli_path,
             &prompt,
             Path::new(&work_dir),
-            Some(&config.default_model),
-            &sandbox.allowed_tools,
+            None,
+            &[],
         );
-
-        cmd.env(self.api_key_env_var(&config.agent_type), &api_key);
-
-        if let Ok(env_map) = serde_json::from_str::<HashMap<String, String>>(&config.env_vars) {
-            for (key, value) in &env_map {
-                cmd.env(key, value);
-            }
-        }
 
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -384,7 +363,7 @@ impl AgentManager {
             .insert(task_id.clone(), state);
 
         let states = self.execution_states.clone();
-        let timeout_secs = config.timeout_seconds as u64;
+        let timeout_secs = 600u64;
         let task_id_clone = task_id.clone();
         let event_name = format!("agent:log:{}", task_id);
 
@@ -662,36 +641,16 @@ impl AgentManager {
             Err(_) => (false, None),
         };
 
-        let version_compatible = if let Some(ref ver) = detected_version {
-            if config.min_cli_version.is_empty() {
-                true
-            } else {
-                ver >= &config.min_cli_version
-            }
-        } else {
-            false
-        };
-
-        let api_key_configured = !config.api_key_encrypted.is_empty();
+        let version_compatible = cli_found;
 
         let status = if !cli_found {
             "unavailable"
-        } else if !version_compatible {
-            "outdated"
-        } else if !api_key_configured {
-            "no_key"
         } else {
             "healthy"
         };
 
         let message = match status {
             "unavailable" => format!("CLI 未安装或不在 PATH 中: {}", config.cli_path),
-            "outdated" => format!(
-                "版本过低，当前 {}，要求 >= {}",
-                detected_version.as_deref().unwrap_or("?"),
-                config.min_cli_version
-            ),
-            "no_key" => "API Key 未配置".to_string(),
             "healthy" => format!(
                 "就绪 (v{})",
                 detected_version.as_deref().unwrap_or("?")

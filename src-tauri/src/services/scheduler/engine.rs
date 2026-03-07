@@ -8,6 +8,7 @@ use crate::db::{Database, agent_db, dependency_db, scheduler_db};
 use crate::services::agent::AgentManager;
 
 use super::concurrency::ConcurrencyManager;
+use super::cron_manager;
 use super::priority_queue::{PriorityQueue, QueuedTask, calculate_priority};
 use super::state_machine;
 
@@ -65,6 +66,7 @@ impl TaskScheduler {
             return;
         }
 
+        self.check_cron_tasks(app).await;
         self.promote_pending_to_queued(app).await;
         self.dispatch_queued_tasks(app).await;
     }
@@ -207,6 +209,78 @@ impl TaskScheduler {
         .map_err(|e| format!("更新状态失败: {}", e))?;
 
         Ok(())
+    }
+
+    /// 检查定时任务是否需要触发
+    async fn check_cron_tasks(&self, app: &tauri::AppHandle) {
+        let db = app.state::<Database>();
+
+        let scheduled_todos: Vec<(i64, String, Option<String>)> = match db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, cron_expression, last_scheduled_run
+                 FROM todos
+                 WHERE schedule_enabled = 1 AND cron_expression IS NOT NULL AND cron_expression != ''"
+            )?;
+
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })?;
+            rows.collect()
+        }) {
+            Ok(todos) => todos,
+            Err(_) => return,
+        };
+
+        for (todo_id, cron_expr, last_run) in scheduled_todos {
+            let should_trigger = cron_manager::should_trigger(
+                &cron_expr,
+                last_run.as_deref(),
+            )
+            .unwrap_or(false);
+
+            if !should_trigger {
+                continue;
+            }
+
+            // 查找该 Todo 下的 none/completed 状态子任务，将其提交为 pending
+            let subtasks: Vec<(i64, String)> = db
+                .with_connection(|conn| {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, schedule_status FROM subtasks
+                         WHERE parent_id = ?1 AND completed = 0
+                         AND schedule_status IN ('none', 'completed', 'failed')"
+                    )?;
+                    let rows = stmt.query_map([todo_id], |row| {
+                        Ok((row.get(0)?, row.get(1)?))
+                    })?;
+                    rows.collect()
+                })
+                .unwrap_or_default();
+
+            for (subtask_id, current_status) in subtasks {
+                if state_machine::can_transition(
+                    &state_machine::ScheduleStatus::from_str(&current_status),
+                    &state_machine::ScheduleStatus::Pending,
+                ) {
+                    let _ = db.with_connection(|conn| {
+                        scheduler_db::update_schedule_status(conn, subtask_id, "pending")?;
+                        scheduler_db::reset_retry_count(conn, subtask_id)
+                    });
+                }
+            }
+
+            // 更新 last_scheduled_run
+            let _ = db.with_connection(|conn| {
+                conn.execute(
+                    "UPDATE todos SET last_scheduled_run = datetime('now', 'localtime') WHERE id = ?1",
+                    [todo_id],
+                )
+            });
+        }
     }
 
     /// 重新计算所有排队任务的优先级，重建队列

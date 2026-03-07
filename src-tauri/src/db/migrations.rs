@@ -98,6 +98,11 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("INSERT INTO migrations (version) VALUES (16)", [])?;
     }
 
+    if current_version < 17 {
+        migration_v17(conn)?;
+        conn.execute("INSERT INTO migrations (version) VALUES (17)", [])?;
+    }
+
     Ok(())
 }
 
@@ -269,6 +274,15 @@ fn migration_v16(conn: &Connection) -> Result<()> {
              '[{\"name\":\"review_scope\",\"label\":\"审查范围\",\"type\":\"textarea\",\"required\":true},{\"name\":\"review_focus\",\"label\":\"关注重点\",\"type\":\"textarea\",\"required\":false}]',
              'claude_code', 1);"
     )
+}
+
+/// 迁移 v17：给 todos 表添加 last_scheduled_run 字段，用于 Cron 定时任务触发时间记录。
+fn migration_v17(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "ALTER TABLE todos ADD COLUMN last_scheduled_run TEXT",
+        [],
+    )?;
+    Ok(())
 }
 
 /// 迁移 v10：简化 agent_configs 表，移除不再需要的字段。

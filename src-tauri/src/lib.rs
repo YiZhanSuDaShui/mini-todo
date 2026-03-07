@@ -86,6 +86,9 @@ use commands::{
     update_subtask_schedule_status,
     update_subtask_timeout,
     update_todo_schedule_config,
+    validate_cron_expression,
+    get_next_cron_execution,
+    get_scheduled_todos,
     // Prompt 模板命令
     create_prompt_template,
     delete_prompt_template,
@@ -388,6 +391,9 @@ pub fn run() {
             stop_scheduler,
             get_scheduler_status,
             submit_task_to_scheduler,
+            validate_cron_expression,
+            get_next_cron_execution,
+            get_scheduled_todos,
             // Prompt 模板命令
             get_prompt_templates,
             get_prompt_template,

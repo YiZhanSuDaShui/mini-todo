@@ -2,6 +2,7 @@ use std::sync::Arc;
 use tauri::State;
 use crate::db::Database;
 use crate::db::{scheduler_db, dependency_db};
+use crate::services::scheduler::cron_manager;
 use crate::services::scheduler::engine::TaskScheduler;
 use crate::services::scheduler::state_machine;
 
@@ -187,4 +188,63 @@ pub async fn submit_task_to_scheduler(
     subtask_id: i64,
 ) -> Result<(), String> {
     scheduler.submit_task(&app, subtask_id).await
+}
+
+#[tauri::command]
+pub fn validate_cron_expression(
+    expression: String,
+) -> Result<String, String> {
+    cron_manager::validate_cron(&expression)?;
+    Ok(cron_manager::describe_cron(&expression))
+}
+
+#[tauri::command]
+pub fn get_next_cron_execution(
+    expression: String,
+) -> Result<String, String> {
+    let next = cron_manager::next_execution_time(&expression)?;
+    Ok(next.format("%Y-%m-%d %H:%M:%S").to_string())
+}
+
+#[tauri::command]
+pub fn get_scheduled_todos(
+    db: State<Database>,
+) -> Result<Vec<serde_json::Value>, String> {
+    db.with_connection(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT t.id, t.title, t.cron_expression, t.schedule_enabled, t.last_scheduled_run,
+                    (SELECT COUNT(*) FROM subtasks s WHERE s.parent_id = t.id AND s.completed = 0) as pending_subtasks
+             FROM todos t
+             WHERE t.cron_expression IS NOT NULL AND t.cron_expression != ''
+             ORDER BY t.schedule_enabled DESC, t.title ASC"
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let id: i64 = row.get(0)?;
+            let title: String = row.get(1)?;
+            let cron_expression: String = row.get(2)?;
+            let schedule_enabled: bool = row.get::<_, i32>(3)? != 0;
+            let last_scheduled_run: Option<String> = row.get(4)?;
+            let pending_subtasks: i64 = row.get(5)?;
+
+            let description = cron_manager::describe_cron(&cron_expression);
+            let next_run = cron_manager::next_execution_time(&cron_expression)
+                .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_default();
+
+            Ok(serde_json::json!({
+                "id": id,
+                "title": title,
+                "cronExpression": cron_expression,
+                "cronDescription": description,
+                "scheduleEnabled": schedule_enabled,
+                "lastScheduledRun": last_scheduled_run,
+                "nextRun": next_run,
+                "pendingSubtasks": pending_subtasks
+            }))
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+    })
+    .map_err(|e| format!("获取定时任务列表失败: {}", e))
 }

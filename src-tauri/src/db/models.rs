@@ -9,7 +9,8 @@ pub const SUBTASK_COLUMNS: &str =
 pub const TODO_COLUMNS: &str =
     "id, title, description, color, quadrant, notify_at, notify_before,
      notified, completed, sort_order, start_time, end_time, created_at, updated_at,
-     agent_id, agent_project_path, schedule_strategy, cron_expression, schedule_enabled";
+     agent_id, agent_project_path, schedule_strategy, cron_expression, schedule_enabled,
+     last_scheduled_run";
 
 pub fn subtask_from_row(row: &Row) -> rusqlite::Result<SubTask> {
     Ok(SubTask {
@@ -53,6 +54,7 @@ pub fn todo_from_row(row: &Row) -> rusqlite::Result<Todo> {
         schedule_strategy: row.get::<_, String>(16).unwrap_or_else(|_| "manual".to_string()),
         cron_expression: row.get(17).unwrap_or(None),
         schedule_enabled: row.get::<_, i32>(18).unwrap_or(0) != 0,
+        last_scheduled_run: row.get(19).unwrap_or(None),
         subtasks: Vec::new(),
     })
 }
@@ -88,6 +90,8 @@ pub struct Todo {
     pub cron_expression: Option<String>,
     #[serde(default)]
     pub schedule_enabled: bool,
+    #[serde(default)]
+    pub last_scheduled_run: Option<String>,
     #[serde(default)]
     pub subtasks: Vec<SubTask>,
 }

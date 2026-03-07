@@ -5,9 +5,12 @@ import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { currentMonitor, primaryMonitor } from '@tauri-apps/api/window'
-import { ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import type { Todo, CreateTodoRequest, UpdateTodoRequest, CreateSubTaskRequest, QuadrantType } from '@/types'
 import { DEFAULT_COLOR, PRESET_COLORS, QUADRANT_INFO, DEFAULT_QUADRANT } from '@/types'
+import { useAgentStore } from '@/stores/agentStore'
+import { AGENT_TYPE_INFO } from '@/types/agent'
+import AgentLogPanel from '@/components/AgentLogPanel.vue'
 
 const route = useRoute()
 const todoId = computed(() => route.query.id ? parseInt(route.query.id as string) : null)
@@ -197,6 +200,7 @@ onMounted(async () => {
   if (todoId.value) {
     await loadTodo()
   }
+  agentStore.loadAgents()
 })
 
 // 加载待办数据
@@ -551,6 +555,112 @@ async function openSubtaskEditorWindow(subtaskId: number) {
   }
 }
 
+// ========== Agent 执行 ==========
+const agentStore = useAgentStore()
+const agentDialogVisible = ref(false)
+const agentExecuting = ref(false)
+const agentTaskId = ref('')
+const logPanelRef = ref<InstanceType<typeof AgentLogPanel> | null>(null)
+
+const agentForm = ref({
+  agentId: null as number | null,
+  prompt: '',
+  projectPath: '',
+})
+
+function openAgentDialog() {
+  if (agentStore.enabledAgents.length === 0) {
+    ElMessage.warning('请先在设置中配置并启用 Agent')
+    return
+  }
+
+  const ctx = buildPromptContext()
+  agentForm.value = {
+    agentId: agentStore.enabledAgents[0]?.id ?? null,
+    prompt: ctx,
+    projectPath: '',
+  }
+  agentTaskId.value = ''
+  agentDialogVisible.value = true
+}
+
+function buildPromptContext(): string {
+  const lines: string[] = []
+  const title = form.value.title.trim()
+  const desc = form.value.description?.trim()
+  if (title) lines.push(`任务: ${title}`)
+  if (desc) lines.push(`描述: ${desc}`)
+
+  const subs = currentSubtaskList.value
+    .filter(s => !s.completed)
+    .map(s => s.title)
+  if (subs.length > 0) {
+    lines.push(`未完成子任务:`)
+    subs.forEach(s => lines.push(`  - ${s}`))
+  }
+
+  if (lines.length > 0) {
+    lines.push('')
+    lines.push('请根据以上任务信息执行相应操作。')
+  }
+  return lines.join('\n')
+}
+
+async function handleAgentExecute() {
+  if (!agentForm.value.agentId) {
+    ElMessage.warning('请选择 Agent')
+    return
+  }
+  if (!agentForm.value.prompt.trim()) {
+    ElMessage.warning('请输入执行指令')
+    return
+  }
+  if (!agentForm.value.projectPath.trim()) {
+    ElMessage.warning('请输入项目路径')
+    return
+  }
+
+  const taskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  agentTaskId.value = taskId
+  agentExecuting.value = true
+
+  logPanelRef.value?.clearLog()
+  logPanelRef.value?.startExecution()
+
+  try {
+    await logPanelRef.value?.startListening(taskId)
+
+    const result = await agentStore.executeAgent(
+      agentForm.value.agentId,
+      agentForm.value.prompt,
+      agentForm.value.projectPath,
+      taskId,
+    )
+    ElMessage.success(`Agent 执行完成 (${result.durationMs}ms)`)
+  } catch (e) {
+    ElMessage.error('Agent 执行失败: ' + String(e))
+  } finally {
+    agentExecuting.value = false
+  }
+}
+
+async function handleAgentCancel() {
+  if (!agentTaskId.value) return
+  try {
+    await agentStore.cancelExecution(agentTaskId.value)
+    ElMessage.info('已发送取消请求')
+  } catch (e) {
+    ElMessage.error('取消失败: ' + String(e))
+  }
+}
+
+function getAgentLabel(agentId: number): string {
+  const agent = agentStore.agents.find(a => a.id === agentId)
+  if (!agent) return ''
+  const typeInfo = AGENT_TYPE_INFO[agent.agentType]
+  return `${agent.name} (${typeInfo?.label || agent.agentType})`
+}
+
 // 关闭窗口
 function handleClose() {
   appWindow.close()
@@ -756,37 +866,49 @@ function handleClose() {
       </div>
 
       <div class="window-footer">
-        <el-button
-          v-if="isEdit && todo && !todo.completed"
-          type="success"
-          plain
-          :loading="isUpdatingCompleteState"
-          @click="handleCompleteTodo"
-        >
-          <el-icon><CircleCheck /></el-icon>
-          完成任务
-        </el-button>
-        <el-button
-          v-if="isEdit && todo && todo.completed"
-          type="warning"
-          plain
-          :loading="isUpdatingCompleteState"
-          @click="handleReopenTodo"
-        >
-          <el-icon><RefreshLeft /></el-icon>
-          重新打开
-        </el-button>
-        <el-button @click="handleClose">
-          <el-icon><Close /></el-icon>
-          取消
-        </el-button>
-        <el-button type="primary" @click="handleSave">
-          <el-icon>
-            <Check v-if="isEdit" />
-            <Plus v-else />
-          </el-icon>
-          {{ isEdit ? '保存' : '创建' }}
-        </el-button>
+        <div class="footer-left">
+          <el-button
+            type="info"
+            plain
+            @click="openAgentDialog"
+          >
+            <el-icon><MagicStick /></el-icon>
+            Agent
+          </el-button>
+        </div>
+        <div class="footer-right">
+          <el-button
+            v-if="isEdit && todo && !todo.completed"
+            type="success"
+            plain
+            :loading="isUpdatingCompleteState"
+            @click="handleCompleteTodo"
+          >
+            <el-icon><CircleCheck /></el-icon>
+            完成任务
+          </el-button>
+          <el-button
+            v-if="isEdit && todo && todo.completed"
+            type="warning"
+            plain
+            :loading="isUpdatingCompleteState"
+            @click="handleReopenTodo"
+          >
+            <el-icon><RefreshLeft /></el-icon>
+            重新打开
+          </el-button>
+          <el-button @click="handleClose">
+            <el-icon><Close /></el-icon>
+            取消
+          </el-button>
+          <el-button type="primary" @click="handleSave">
+            <el-icon>
+              <Check v-if="isEdit" />
+              <Plus v-else />
+            </el-icon>
+            {{ isEdit ? '保存' : '创建' }}
+          </el-button>
+        </div>
       </div>
     </div>
 
@@ -903,6 +1025,87 @@ function handleClose() {
 
     <!-- 模态遮罩：子任务编辑窗口打开时阻止操作 -->
     <div v-if="isSubtaskEditorOpen" class="modal-overlay"></div>
+
+    <!-- Agent 执行对话框 -->
+    <el-dialog
+      v-model="agentDialogVisible"
+      title="Agent 执行"
+      width="560px"
+      :close-on-click-modal="!agentExecuting"
+      :close-on-press-escape="!agentExecuting"
+      append-to-body
+      class="agent-exec-dialog"
+      top="5vh"
+    >
+      <div style="max-height: 65vh; overflow-y: auto; padding-right: 4px;">
+        <el-form label-position="top" size="default">
+          <el-form-item label="选择 Agent" required>
+            <el-select
+              v-model="agentForm.agentId"
+              style="width: 100%"
+              :disabled="agentExecuting"
+            >
+              <el-option
+                v-for="agent in agentStore.enabledAgents"
+                :key="agent.id"
+                :label="getAgentLabel(agent.id)"
+                :value="agent.id"
+              />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item label="项目路径" required>
+            <el-input
+              v-model="agentForm.projectPath"
+              placeholder="Agent 工作的项目目录，如 D:\Git\my-project"
+              :disabled="agentExecuting"
+              clearable
+            />
+          </el-form-item>
+
+          <el-form-item label="执行指令" required>
+            <el-input
+              v-model="agentForm.prompt"
+              type="textarea"
+              :rows="5"
+              placeholder="输入要 Agent 执行的指令..."
+              :disabled="agentExecuting"
+            />
+          </el-form-item>
+        </el-form>
+
+        <AgentLogPanel
+          v-if="agentTaskId"
+          ref="logPanelRef"
+          :task-id="agentTaskId"
+        />
+      </div>
+
+      <template #footer>
+        <el-button
+          v-if="agentExecuting"
+          type="danger"
+          @click="handleAgentCancel"
+        >
+          <el-icon><CircleClose /></el-icon>
+          取消执行
+        </el-button>
+        <el-button
+          v-else
+          @click="agentDialogVisible = false"
+        >
+          关闭
+        </el-button>
+        <el-button
+          v-if="!agentExecuting"
+          type="primary"
+          @click="handleAgentExecute"
+        >
+          <el-icon><VideoPlay /></el-icon>
+          开始执行
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -950,10 +1153,20 @@ function handleClose() {
 
 .window-footer {
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
+  justify-content: space-between;
+  align-items: center;
   padding: 12px 16px;
   border-top: 1px solid var(--border);
+}
+
+.footer-left {
+  display: flex;
+  gap: 8px;
+}
+
+.footer-right {
+  display: flex;
+  gap: 8px;
 }
 
 /* 子任务面板 */
@@ -1433,5 +1646,11 @@ function handleClose() {
   background: rgba(0, 0, 0, 0.15);
   z-index: 9999;
   cursor: not-allowed;
+}
+</style>
+
+<style>
+.agent-exec-dialog .el-dialog__body {
+  padding-top: 12px;
 }
 </style>

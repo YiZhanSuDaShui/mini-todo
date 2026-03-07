@@ -14,6 +14,7 @@ export interface ExecutionInfo {
   taskId: string
   subtaskId: number
   agentId: number
+  agentType: string
   status: 'running' | 'completed' | 'failed' | 'cancelled'
   logs: Array<{ content: string; level: string; timestampMs: number }>
   startTimeMs: number
@@ -23,6 +24,7 @@ export interface ExecutionInfo {
 
 export interface ExecutionState {
   taskId: string
+  agentType: string
   status: string
   logs: Array<{ content: string; level: string; timestampMs: number }>
   result?: {
@@ -108,10 +110,12 @@ export const useAgentStore = defineStore('agent', () => {
     taskId: string,
     subtaskId: number,
   ): Promise<void> {
+    const agent = agents.value.find(a => a.id === agentId)
     const info: ExecutionInfo = {
       taskId,
       subtaskId,
       agentId,
+      agentType: agent?.agentType || '',
       status: 'running',
       logs: [],
       startTimeMs: Date.now(),
@@ -185,6 +189,7 @@ export const useAgentStore = defineStore('agent', () => {
       taskId: state.taskId,
       subtaskId,
       agentId: 0,
+      agentType: state.agentType || '',
       status: state.status as ExecutionInfo['status'],
       logs: state.logs || [],
       startTimeMs: state.startTimeMs,

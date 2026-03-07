@@ -269,6 +269,7 @@ pub struct AgentExecution {
     pub task_id: String,
     pub subtask_id: Option<i64>,
     pub agent_id: Option<i64>,
+    pub agent_type: String,
     pub status: String,
     pub logs: String,
     pub result_text: String,

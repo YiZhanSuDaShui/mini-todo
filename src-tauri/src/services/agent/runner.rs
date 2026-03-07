@@ -467,6 +467,7 @@ pub trait AgentRunner: Send + Sync {
 pub struct ExecutionState {
     pub task_id: String,
     pub subtask_id: Option<i64>,
+    pub agent_type: String,
     pub status: String,
     pub logs: Vec<CachedLog>,
     pub result: Option<AgentOutput>,
@@ -520,7 +521,7 @@ impl AgentManager {
 
         let work_dir = project_path.clone();
 
-        let mut cmd = runner.build_command(
+        let cmd = runner.build_command(
             &config.cli_path,
             &prompt,
             Path::new(&work_dir),
@@ -536,6 +537,7 @@ impl AgentManager {
         let state = ExecutionState {
             task_id: task_id.clone(),
             subtask_id,
+            agent_type: config.agent_type.clone(),
             status: "running".to_string(),
             logs: Vec::new(),
             result: None,
@@ -777,6 +779,7 @@ impl AgentManager {
                 &state.task_id,
                 state.subtask_id,
                 agent_id,
+                &state.agent_type,
                 &state.status,
                 &logs_json,
                 &result_text,

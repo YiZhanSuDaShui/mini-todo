@@ -402,6 +402,7 @@ onBeforeUnmount(() => {
           v-if="agentTaskId"
           :key="agentTaskId"
           :task-id="agentTaskId"
+          :agent-type="currentExecution?.agentType || ''"
           :initial-status="logPanelStatus"
           :initial-logs="logPanelLogs"
           :initial-start-time="currentExecution?.startTimeMs"
@@ -432,7 +433,7 @@ onBeforeUnmount(() => {
             <el-button @click="agentDialogVisible = false">
               关闭
             </el-button>
-            <template v-if="!agentExecuting">
+            <template v-if="!currentExecution">
               <el-button type="primary" @click="handleAgentExecute(false)">
                 <el-icon><VideoPlay /></el-icon>
                 开始执行

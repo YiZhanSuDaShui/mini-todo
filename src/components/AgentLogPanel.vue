@@ -6,6 +6,7 @@ import type { AgentEvent } from '@/types/agent'
 
 const props = defineProps<{
   taskId: string
+  agentType?: string
   initialStatus?: 'idle' | 'running' | 'completed' | 'failed'
   initialLogs?: Array<{ content: string; level: string }>
   initialStartTime?: number

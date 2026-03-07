@@ -124,6 +124,7 @@ pub async fn get_agent_execution_by_subtask(
         return Ok(Some(ExecutionState {
             task_id: rec.task_id,
             subtask_id: rec.subtask_id,
+            agent_type: rec.agent_type,
             status: rec.status,
             logs,
             result: None,

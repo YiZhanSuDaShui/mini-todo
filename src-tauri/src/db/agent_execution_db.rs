@@ -7,6 +7,7 @@ pub fn save_execution(
     task_id: &str,
     subtask_id: Option<i64>,
     agent_id: Option<i64>,
+    agent_type: &str,
     status: &str,
     logs_json: &str,
     result_text: &str,
@@ -18,13 +19,14 @@ pub fn save_execution(
 ) -> Result<i64> {
     conn.execute(
         "INSERT INTO agent_executions
-            (task_id, subtask_id, agent_id, status, logs, result_text, error,
+            (task_id, subtask_id, agent_id, agent_type, status, logs, result_text, error,
              input_tokens, output_tokens, start_time_ms, duration_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             task_id,
             subtask_id,
             agent_id,
+            agent_type,
             status,
             logs_json,
             result_text,
@@ -43,7 +45,7 @@ pub fn get_latest_by_subtask(
     subtask_id: i64,
 ) -> Result<Option<AgentExecution>> {
     let mut stmt = conn.prepare(
-        "SELECT id, task_id, subtask_id, agent_id, status, logs, result_text, error,
+        "SELECT id, task_id, subtask_id, agent_id, agent_type, status, logs, result_text, error,
                 input_tokens, output_tokens, start_time_ms, duration_ms, created_at
          FROM agent_executions
          WHERE subtask_id = ?1
@@ -57,15 +59,16 @@ pub fn get_latest_by_subtask(
             task_id: row.get(1)?,
             subtask_id: row.get(2)?,
             agent_id: row.get(3)?,
-            status: row.get(4)?,
-            logs: row.get(5)?,
-            result_text: row.get(6)?,
-            error: row.get(7)?,
-            input_tokens: row.get(8)?,
-            output_tokens: row.get(9)?,
-            start_time_ms: row.get(10)?,
-            duration_ms: row.get(11)?,
-            created_at: row.get(12)?,
+            agent_type: row.get(4)?,
+            status: row.get(5)?,
+            logs: row.get(6)?,
+            result_text: row.get(7)?,
+            error: row.get(8)?,
+            input_tokens: row.get(9)?,
+            output_tokens: row.get(10)?,
+            start_time_ms: row.get(11)?,
+            duration_ms: row.get(12)?,
+            created_at: row.get(13)?,
         })
     })?;
 

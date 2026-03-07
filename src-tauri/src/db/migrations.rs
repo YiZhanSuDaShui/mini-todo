@@ -73,6 +73,11 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("INSERT INTO migrations (version) VALUES (11)", [])?;
     }
 
+    if current_version < 12 {
+        migration_v12(conn)?;
+        conn.execute("INSERT INTO migrations (version) VALUES (12)", [])?;
+    }
+
     Ok(())
 }
 
@@ -99,6 +104,16 @@ fn migration_v11(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_agent_executions_subtask ON agent_executions(subtask_id);
         CREATE INDEX IF NOT EXISTS idx_agent_executions_task ON agent_executions(task_id);"
     )
+}
+
+/// 迁移 v12：agent_executions 表新增 agent_type 字段，
+/// 支持前端按 Agent 类型分别处理日志显示。
+fn migration_v12(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "ALTER TABLE agent_executions ADD COLUMN agent_type TEXT NOT NULL DEFAULT ''",
+        [],
+    )?;
+    Ok(())
 }
 
 /// 迁移 v10：简化 agent_configs 表，移除不再需要的字段。

@@ -614,7 +614,7 @@ const currentAgentLabel = computed(() => {
   const agent = agentStore.agents.find(a => a.id === id)
   if (!agent) return ''
   const typeInfo = AGENT_TYPE_INFO[agent.agentType]
-  return `${agent.name} (${typeInfo?.label || agent.agentType})`
+  return typeInfo?.label || agent.agentType
 })
 
 const hasAgentConfig = computed(() => {

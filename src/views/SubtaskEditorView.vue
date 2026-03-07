@@ -200,7 +200,7 @@ const currentAgentLabel = computed(() => {
   const agent = agentStore.agents.find(a => a.id === agentForm.value.agentId)
   if (!agent) return ''
   const typeInfo = AGENT_TYPE_INFO[agent.agentType]
-  return `${agent.name} (${typeInfo?.label || agent.agentType})`
+  return typeInfo?.label || agent.agentType
 })
 
 const logPanelStatus = computed<'idle' | 'running' | 'completed' | 'failed'>(() => {

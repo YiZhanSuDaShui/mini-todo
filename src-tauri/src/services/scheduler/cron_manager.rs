@@ -98,6 +98,9 @@ pub fn describe_cron(expression: &str) -> String {
         };
         return format!("每{} {}:{} 执行", day_name, hour, min);
     }
+    if sec == "0" && min == "0" && hour == "*" && dom == "*" && mon == "*" && dow == "*" {
+        return "每小时执行".to_string();
+    }
     if sec == "0" && dom == "*" && mon == "*" && dow == "*" {
         if let Ok(interval) = min.strip_prefix("*/").unwrap_or("").parse::<u32>() {
             return format!("每 {} 分钟执行", interval);
@@ -105,6 +108,9 @@ pub fn describe_cron(expression: &str) -> String {
         if let Ok(interval) = hour.strip_prefix("*/").unwrap_or("").parse::<u32>() {
             return format!("每 {} 小时执行", interval);
         }
+    }
+    if sec == "0" && min != "*" && hour != "*" && dom != "*" && mon == "*" && dow == "*" {
+        return format!("每月 {} 日 {}:{} 执行", dom, hour, min);
     }
 
     expression.to_string()

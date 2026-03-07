@@ -1687,5 +1687,7 @@ function handleClose() {
 <style>
 .agent-config-dialog .el-dialog__body {
   padding-top: 12px;
+  max-height: 60vh;
+  overflow-y: auto;
 }
 </style>

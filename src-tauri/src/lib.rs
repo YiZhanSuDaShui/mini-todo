@@ -103,10 +103,6 @@ use commands::{
     get_prompt_templates_by_category,
     render_prompt_template,
     update_prompt_template,
-    // 智能化命令
-    build_project_context,
-    split_task,
-    apply_split_result,
 };
 
 #[cfg(target_os = "windows")]
@@ -419,10 +415,6 @@ pub fn run() {
             update_prompt_template,
             delete_prompt_template,
             render_prompt_template,
-            // 智能化命令
-            build_project_context,
-            split_task,
-            apply_split_result,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

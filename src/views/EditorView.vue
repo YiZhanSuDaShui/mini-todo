@@ -14,7 +14,6 @@ import { AGENT_TYPE_INFO } from '@/types/agent'
 import { SCHEDULE_STATUS_MAP } from '@/types/scheduler'
 import type { ScheduleStrategy } from '@/types/scheduler'
 import CronEditor from '@/components/CronEditor.vue'
-import TaskSplitDialog from '@/components/TaskSplitDialog.vue'
 
 const route = useRoute()
 const todoId = computed(() => route.query.id ? parseInt(route.query.id as string) : null)
@@ -581,12 +580,6 @@ async function openSubtaskWindow(subtaskId: number, mode: 'edit' | 'view') {
 // ========== Agent 配置 ==========
 const agentStore = useAgentStore()
 const agentConfigVisible = ref(false)
-const showSplitDialog = ref(false)
-
-function onSplitCompleted() {
-  showSplitDialog.value = false
-  loadTodo()
-}
 
 const agentForm = ref({
   agentId: null as number | null,
@@ -887,16 +880,6 @@ function handleClose() {
             <el-icon><MagicStick /></el-icon>
             {{ hasAgentConfig ? currentAgentLabel : 'Agent' }}
           </el-button>
-          <el-button
-            v-if="isEdit && hasAgentConfig && agentForm.projectPath"
-            type="warning"
-            plain
-            size="small"
-            @click="showSplitDialog = true"
-          >
-            <el-icon><ScaleToOriginal /></el-icon>
-            智能拆分
-          </el-button>
         </div>
         <div class="footer-right">
           <el-button
@@ -1141,15 +1124,6 @@ function handleClose() {
         </el-button>
       </template>
     </el-dialog>
-
-    <!-- 智能拆分对话框 -->
-    <TaskSplitDialog
-      v-if="showSplitDialog && todo"
-      :todo-id="todoId!"
-      :project-path="agentForm.projectPath"
-      @completed="onSplitCompleted"
-      @close="showSplitDialog = false"
-    />
   </div>
 </template>
 

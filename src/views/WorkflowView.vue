@@ -117,7 +117,7 @@ function availableSubtasksForStep(currentIdx: number) {
   const usedIds = workflowSteps.value
     .filter((s, i) => i !== currentIdx && s.stepType === 'subtask' && s.subtaskId)
     .map(s => s.subtaskId)
-  return subtasks.value.filter(st => !usedIds.includes(st.id))
+  return subtasks.value.filter(st => !st.completed && !usedIds.includes(st.id))
 }
 
 function selectPromptForStep(idx: number, template: PromptTemplate) {
@@ -471,6 +471,7 @@ function quickInsertPrompt(tpl: PromptTemplate) {
                   size="small"
                   placeholder="选择子任务"
                   clearable
+                  popper-class="subtask-select-popper"
                   @change="(val: number) => onSubtaskSelected(idx, val)"
                 >
                   <el-option
@@ -478,7 +479,10 @@ function quickInsertPrompt(tpl: PromptTemplate) {
                     :key="st.id"
                     :label="st.title"
                     :value="st.id"
-                  />
+                    class="subtask-option-item"
+                  >
+                    <span class="subtask-option-text">{{ st.title }}</span>
+                  </el-option>
                 </el-select>
                 <el-select
                   v-else
@@ -1162,4 +1166,30 @@ function quickInsertPrompt(tpl: PromptTemplate) {
   gap: 8px;
 }
 
+</style>
+
+<style>
+.subtask-select-popper .el-select-dropdown__item {
+  height: auto !important;
+  padding: 8px 12px !important;
+  line-height: 1.5 !important;
+  white-space: normal !important;
+  word-break: break-all !important;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.subtask-select-popper .el-select-dropdown__item:last-child {
+  border-bottom: none;
+}
+
+.subtask-select-popper .subtask-option-text {
+  display: block;
+  white-space: normal;
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.subtask-select-popper .el-select-dropdown__list {
+  max-width: 480px;
+}
 </style>

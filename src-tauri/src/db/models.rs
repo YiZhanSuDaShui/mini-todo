@@ -318,6 +318,14 @@ pub struct ExportData {
     pub exported_at: String,
     pub todos: Vec<Todo>,
     pub settings: AppSettings,
+    #[serde(default)]
+    pub agent_configs: Vec<AgentConfig>,
+    #[serde(default)]
+    pub workflow_steps: Vec<WorkflowStep>,
+    #[serde(default)]
+    pub task_dependencies: Vec<TaskDependency>,
+    #[serde(default)]
+    pub prompt_templates: Vec<PromptTemplate>,
 }
 
 /// 屏幕配置记录，用于存储不同屏幕组合下的窗口状态

@@ -24,14 +24,18 @@ pub fn update_status_and_notify(
     subtask_id: i64,
     status: &str,
 ) {
-    let _ = db.with_connection(|conn| scheduler_db::update_schedule_status(conn, subtask_id, status));
-    let _ = app.emit(
+    if let Err(e) = db.with_connection(|conn| scheduler_db::update_schedule_status(conn, subtask_id, status)) {
+        eprintln!("[Scheduler] 更新子任务 {} 状态为 {} 失败: {}", subtask_id, status, e);
+    }
+    if let Err(e) = app.emit(
         "schedule:status-changed",
         ScheduleStatusChanged {
             subtask_id,
             status: status.to_string(),
         },
-    );
+    ) {
+        eprintln!("[Scheduler] 发送状态变更事件失败: {}", e);
+    }
 }
 
 fn now_ms() -> u64 {

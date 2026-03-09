@@ -18,6 +18,7 @@ import { useAgentStore } from '@/stores/agentStore'
 import { useSchedulerStore } from '@/stores/schedulerStore'
 import { AGENT_TYPE_INFO } from '@/types/agent'
 import type { PromptTemplate, TemplateVariable } from '@/types/scheduler'
+import { listen } from '@tauri-apps/api/event'
 import { openLogWindow } from '@/utils/logWindow'
 
 const route = useRoute()
@@ -378,6 +379,8 @@ const scheduleStatusLabel = computed(() => {
   return map[scheduleStatus.value] || scheduleStatus.value
 })
 
+let unlistenScheduleStatus: (() => void) | null = null
+
 onMounted(async () => {
   await loadSubtask()
   await nextTick()
@@ -386,9 +389,19 @@ onMounted(async () => {
   agentStore.loadAgents()
   agentStore.restoreExecutionForSubtask(subtaskId)
   loadScheduleStatus()
+
+  unlistenScheduleStatus = await listen<{ subtask_id: number; status: string }>(
+    'schedule:status-changed',
+    (event) => {
+      if (event.payload.subtask_id === subtaskId) {
+        scheduleStatus.value = event.payload.status
+      }
+    }
+  )
 })
 
 onBeforeUnmount(() => {
+  unlistenScheduleStatus?.()
   editorContainer.value?.removeEventListener('click', handleImageClick)
   destroyEditor()
 })

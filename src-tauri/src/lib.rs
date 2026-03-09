@@ -37,6 +37,7 @@ use commands::{
     get_todos,
     get_window_persist_state,
     import_data,
+    import_subtasks_from_paths,
     is_fixed_mode,
     list_screen_configs,
     reorder_todos,
@@ -333,6 +334,7 @@ pub fn run() {
             create_subtask,
             update_subtask,
             delete_subtask,
+            import_subtasks_from_paths,
             // 图片命令
             get_images_dir,
             get_subtask,

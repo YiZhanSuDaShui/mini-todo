@@ -6,6 +6,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { currentMonitor, primaryMonitor } from '@tauri-apps/api/window'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import type { Todo, CreateTodoRequest, UpdateTodoRequest, CreateSubTaskRequest, QuadrantType } from '@/types'
 import { DEFAULT_COLOR, PRESET_COLORS, QUADRANT_INFO, DEFAULT_QUADRANT } from '@/types'
 import { useAgentStore } from '@/stores/agentStore'
@@ -418,6 +419,70 @@ async function addSubtask() {
       completed: false
     })
     newSubtaskTitle.value = ''
+  }
+}
+
+function handleImportCommand(command: string) {
+  if (command === 'files') importSubtasks()
+  else if (command === 'folder') importSubtasksFromFolder()
+}
+
+async function importSubtasks() {
+  if (!isEdit.value || !todoId.value) {
+    ElMessage.warning('请先保存待办后再导入子任务')
+    return
+  }
+
+  try {
+    const selected = await openDialog({
+      title: '导入子任务（选择 .md/.txt 文件或文件夹）',
+      multiple: true,
+      directory: false,
+      filters: [{ name: '文本文件', extensions: ['md', 'txt'] }],
+    })
+
+    if (!selected) return
+
+    const paths = Array.isArray(selected) ? selected : [selected]
+    if (paths.length === 0) return
+
+    const created = await invoke<any[]>('import_subtasks_from_paths', {
+      parentId: todoId.value,
+      paths,
+    })
+
+    await loadTodo()
+    ElMessage.success(`成功导入 ${created.length} 个子任务`)
+  } catch (e) {
+    ElMessage.error('导入失败: ' + String(e))
+  }
+}
+
+async function importSubtasksFromFolder() {
+  if (!isEdit.value || !todoId.value) {
+    ElMessage.warning('请先保存待办后再导入子任务')
+    return
+  }
+
+  try {
+    const selected = await openDialog({
+      title: '选择文件夹（递归导入 .md/.txt 文件）',
+      directory: true,
+    })
+
+    if (!selected) return
+
+    const paths = [selected as string]
+
+    const created = await invoke<any[]>('import_subtasks_from_paths', {
+      parentId: todoId.value,
+      paths,
+    })
+
+    await loadTodo()
+    ElMessage.success(`成功导入 ${created.length} 个子任务`)
+  } catch (e) {
+    ElMessage.error('导入失败: ' + String(e))
   }
 }
 
@@ -1124,6 +1189,17 @@ function handleClose() {
                   <span>添加</span>
                 </button>
               </transition>
+              <el-dropdown v-if="isEdit" trigger="click" @command="handleImportCommand">
+                <button class="import-btn" title="导入子任务">
+                  <el-icon :size="14"><Upload /></el-icon>
+                </button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="files">选择文件 (.md/.txt)</el-dropdown-item>
+                    <el-dropdown-item command="folder">选择文件夹（递归导入）</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
             </div>
           </div>
 
@@ -1577,6 +1653,28 @@ function handleClose() {
 
       &:active {
         transform: scale(0.96);
+      }
+    }
+
+    .import-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      color: #64748b;
+      background: transparent;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: all 0.15s ease;
+
+      &:hover {
+        color: #3b82f6;
+        border-color: #3b82f6;
+        background: #eff6ff;
       }
     }
   }

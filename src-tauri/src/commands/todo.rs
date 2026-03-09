@@ -3,7 +3,7 @@ use crate::db::{
     CreateSubTaskRequest, CreateTodoRequest, Database, SubTask, Todo, UpdateSubTaskRequest,
     UpdateTodoRequest, subtask_from_row, todo_from_row, SUBTASK_COLUMNS, TODO_COLUMNS,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::State;
 
 #[tauri::command]
@@ -336,4 +336,90 @@ pub fn save_subtask_image(image_data: String, file_name: String) -> Result<Strin
         .to_str()
         .map(|s| s.to_string())
         .ok_or_else(|| "Invalid path".to_string())
+}
+
+#[tauri::command]
+pub fn import_subtasks_from_paths(
+    db: State<Database>,
+    parent_id: i64,
+    paths: Vec<String>,
+) -> Result<Vec<SubTask>, String> {
+    let allowed_exts = ["md", "txt"];
+    let mut files: Vec<PathBuf> = Vec::new();
+
+    for p in &paths {
+        let path = Path::new(p);
+        if path.is_dir() {
+            collect_files_recursive(path, &allowed_exts, &mut files);
+        } else if path.is_file() {
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                if allowed_exts.contains(&ext.to_lowercase().as_str()) {
+                    files.push(path.to_path_buf());
+                }
+            }
+        }
+    }
+
+    if files.is_empty() {
+        return Err("未找到 .md 或 .txt 文件".to_string());
+    }
+
+    files.sort();
+
+    db.with_connection(|conn| {
+        let mut max_order: i32 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(sort_order), -1) FROM subtasks WHERE parent_id = ?",
+                [parent_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(-1);
+
+        let mut created = Vec::new();
+        for file in &files {
+            let title = file
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("untitled")
+                .to_string();
+
+            let content = std::fs::read_to_string(file).unwrap_or_default();
+            if title.is_empty() {
+                continue;
+            }
+
+            max_order += 1;
+            conn.execute(
+                "INSERT INTO subtasks (parent_id, title, content, sort_order) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![parent_id, &title, &content, max_order],
+            )?;
+
+            let id = conn.last_insert_rowid();
+            let sql = format!("SELECT {} FROM subtasks WHERE id = ?", SUBTASK_COLUMNS);
+            let subtask = conn.query_row(&sql, [id], |row| subtask_from_row(row))?;
+            created.push(subtask);
+        }
+
+        Ok(created)
+    })
+    .map_err(|e| e.to_string())
+}
+
+fn collect_files_recursive(dir: &Path, exts: &[&str], out: &mut Vec<PathBuf>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files_recursive(&path, exts, out);
+        } else if path.is_file() {
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                if exts.contains(&ext.to_lowercase().as_str()) {
+                    out.push(path);
+                }
+            }
+        }
+    }
 }

@@ -108,6 +108,9 @@ function moveWorkflowStep(idx: number, dir: 'up' | 'down') {
   const tmp = workflowSteps.value[idx]
   workflowSteps.value[idx] = workflowSteps.value[target]
   workflowSteps.value[target] = tmp
+  if (workflowSteps.value[0]?.carryContext) {
+    workflowSteps.value[0].carryContext = false
+  }
 }
 
 function removeWorkflowStep(idx: number) {

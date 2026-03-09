@@ -26,7 +26,9 @@ impl AgentRunner for ClaudeCodeRunner {
         cmd.current_dir(working_dir);
 
         if let Some(session_id) = resume_session {
-            cmd.args(["-r", session_id]);
+            if !session_id.is_empty() {
+                cmd.args(["-r", session_id]);
+            }
             cmd.args(["-p", prompt]);
         } else {
             cmd.args(["-p", prompt]);

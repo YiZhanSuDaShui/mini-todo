@@ -1,5 +1,6 @@
 use rusqlite::{Connection, Result, params};
 use super::models::{WorkflowStep, WorkflowStepInput};
+use super::agent_execution_db;
 
 pub fn get_workflow_steps(conn: &Connection, todo_id: i64) -> Result<Vec<WorkflowStep>> {
     let mut stmt = conn.prepare(
@@ -93,6 +94,54 @@ pub fn get_step_count(conn: &Connection, todo_id: i64) -> Result<i32> {
         [todo_id],
         |row| row.get(0),
     )
+}
+
+/// 解析当前步骤的 carry_context session_id。
+/// 向前遍历所有前序步骤，查找最近一个已完成（completed）且有 session_id 的步骤。
+/// 返回 Some(session_id) 或 Some("") 表示需要恢复但无具体 ID，None 表示无需恢复。
+pub fn resolve_carry_context_session(
+    conn: &Connection,
+    todo_id: i64,
+    current_step_order: i32,
+) -> Option<String> {
+    if current_step_order <= 0 {
+        return None;
+    }
+
+    for order in (0..current_step_order).rev() {
+        let prev_step = match get_step_at_order(conn, todo_id, order) {
+            Ok(Some(s)) => s,
+            _ => continue,
+        };
+
+        if prev_step.status != "completed" {
+            continue;
+        }
+
+        let session_id = match prev_step.step_type.as_str() {
+            "subtask" => {
+                let sid = match prev_step.subtask_id {
+                    Some(id) => id,
+                    None => continue,
+                };
+                agent_execution_db::get_latest_by_subtask(conn, sid)
+                    .ok()
+                    .flatten()
+                    .and_then(|e| e.session_id)
+            }
+            "prompt" => {
+                let prefix = format!("wf-{}-{}-", todo_id, prev_step.step_order);
+                agent_execution_db::get_latest_session_id_by_task_prefix(conn, &prefix)
+                    .ok()
+                    .flatten()
+            }
+            _ => continue,
+        };
+
+        return Some(session_id.unwrap_or_default());
+    }
+
+    None
 }
 
 pub fn get_step_at_order(conn: &Connection, todo_id: i64, step_order: i32) -> Result<Option<WorkflowStep>> {

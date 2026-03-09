@@ -741,6 +741,9 @@ impl AgentManager {
         let mut total_input = 0u64;
         let mut total_output = 0u64;
         let mut text_response = String::new();
+        let mut session_id: Option<String> = None;
+        let mut estimated_cost_usd: Option<f64> = None;
+        let mut model_used: Option<String> = None;
 
         let child_id = child.id();
 
@@ -777,23 +780,42 @@ impl AgentManager {
 
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
                     let event_type = json["type"].as_str().unwrap_or("");
-                    if event_type == "turn.completed" {
-                        let usage = &json["usage"];
-                        let inp = usage["input_tokens"].as_u64().unwrap_or(0);
-                        let out = usage["output_tokens"].as_u64().unwrap_or(0);
-                        total_input += inp;
-                        total_output += out;
-                        let evt = AgentEvent::TokenUsage {
-                            input_tokens: inp,
-                            output_tokens: out,
-                        };
-                        let _ = app_stdout.emit(&event_name_stdout, &evt);
-                        let mut lock = states_stdout.lock().await;
-                        if let Some(s) = lock.get_mut(&task_id_stdout) {
-                            s.input_tokens = total_input;
-                            s.output_tokens = total_output;
+                    match event_type {
+                        "turn.completed" => {
+                            let usage = &json["usage"];
+                            let inp = usage["input_tokens"].as_u64().unwrap_or(0);
+                            let out = usage["output_tokens"].as_u64().unwrap_or(0);
+                            total_input += inp;
+                            total_output += out;
+                            let evt = AgentEvent::TokenUsage {
+                                input_tokens: inp,
+                                output_tokens: out,
+                            };
+                            let _ = app_stdout.emit(&event_name_stdout, &evt);
+                            let mut lock = states_stdout.lock().await;
+                            if let Some(s) = lock.get_mut(&task_id_stdout) {
+                                s.input_tokens = total_input;
+                                s.output_tokens = total_output;
+                            }
+                            drop(lock);
                         }
-                        drop(lock);
+                        "result" => {
+                            if let Some(sid) = json["session_id"].as_str() {
+                                session_id = Some(sid.to_string());
+                            }
+                            if let Some(cost) = json["cost"]["total_cost_usd"].as_f64() {
+                                estimated_cost_usd = Some(cost);
+                            }
+                            if let Some(model) = json["model"].as_str() {
+                                model_used = Some(model.to_string());
+                            }
+                            if let Some(result_text) = json["result"].as_str() {
+                                if !result_text.is_empty() {
+                                    text_response = result_text.to_string();
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -850,9 +872,9 @@ impl AgentManager {
                     text_response,
                     input_tokens: Some(total_input),
                     output_tokens: Some(total_output),
-                    estimated_cost_usd: None,
-                    model_used: None,
-                    session_id: None,
+                    estimated_cost_usd,
+                    model_used,
+                    session_id,
                     exit_code,
                     duration_ms: 0,
                 })

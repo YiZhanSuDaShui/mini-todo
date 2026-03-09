@@ -118,10 +118,13 @@ function removeWorkflowStep(idx: number) {
 }
 
 function availableSubtasksForStep(currentIdx: number) {
+  const currentSubtaskId = workflowSteps.value[currentIdx]?.subtaskId
   const usedIds = workflowSteps.value
     .filter((s, i) => i !== currentIdx && s.stepType === 'subtask' && s.subtaskId)
     .map(s => s.subtaskId)
-  return subtasks.value.filter(st => !st.completed && !usedIds.includes(st.id))
+  return subtasks.value.filter(st =>
+    (!st.completed || st.id === currentSubtaskId) && !usedIds.includes(st.id)
+  )
 }
 
 function selectPromptForStep(idx: number, template: PromptTemplate) {

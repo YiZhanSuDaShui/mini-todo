@@ -17,6 +17,27 @@
 - 列表/四象限模式都拖拽排序
 - 系统提醒
 
+### AI Agent 集成
+- 支持接入 **Claude Code CLI** 和 **OpenAI Codex CLI** 作为 AI Agent
+- 子任务可配置 Agent，手动或自动触发 AI 执行
+- 执行日志通过独立窗口展示，支持实时流式输出和历史记录查看
+- 运行中的任务可终止，已完成/失败/取消的任务支持重新执行
+- 自动统计 Token 用量和执行耗时
+
+### 工作流编排
+- 可为待办事项配置多步骤工作流
+- 步骤类型：执行子任务、执行提示词
+- 支持步骤间 **上下文传递**（带入上一步 Agent 会话结果，实现连续对话）
+- 内置提示词库，快速复用常用指令
+- 工作流控制：启动、暂停、跳过、重置
+
+### 任务调度
+- 支持手动执行和定时执行（Cron 表达式）两种调度策略
+- 调度状态机管理任务全生命周期
+- 优先级队列 + 并发控制
+- 任务依赖关系配置
+- 失败自动重试
+
 ### 云同步（WebDAV）
 - 支持通过 WebDAV 协议进行云端数据同步（兼容坚果云、NextCloud 等）
 - 同步数据包含待办事项、子任务及图片
@@ -100,8 +121,10 @@ npm run tauri build
 | 状态管理 | Pinia | Vue 官方推荐状态管理 |
 | 桌面框架 | Tauri 2.x | 轻量级跨平台桌面框架 |
 | 后端语言 | Rust | 高性能，内存安全 |
+| 异步运行时 | Tokio | 异步任务调度和进程管理 |
 | 数据库 | SQLite | 轻量级本地数据库 |
 | 云同步协议 | WebDAV | 兼容坚果云、NextCloud 等 |
+| AI Agent | Claude Code / Codex CLI | AI 编程助手集成 |
 
 ## 项目结构
 
@@ -111,13 +134,16 @@ mini-todo/
 │   ├── components/          # Vue 组件
 │   ├── stores/              # Pinia 状态管理
 │   ├── types/               # TypeScript 类型定义
-│   ├── views/               # 页面视图
+│   ├── views/               # 页面视图（含独立 WebView 窗口）
+│   ├── utils/               # 工具函数
 │   └── styles/              # 样式文件
 ├── src-tauri/               # Tauri/Rust 后端源码
 │   ├── src/
-│   │   ├── commands/        # Tauri 命令
-│   │   ├── db/              # 数据库操作
-│   │   └── services/        # 服务模块
+│   │   ├── commands/        # Tauri 命令（前后端桥接）
+│   │   ├── db/              # 数据库层（SQLite + 迁移）
+│   │   └── services/        # 业务服务层
+│   │       ├── agent/       # AI Agent 集成（Claude Code / Codex）
+│   │       └── scheduler/   # 任务调度引擎 + 工作流
 │   └── tauri.conf.json      # Tauri 配置
 └── docs/                    # 文档
 ```

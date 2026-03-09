@@ -309,7 +309,6 @@ async function handleSave() {
         postAction: agentForm.value.postAction !== 'none' ? agentForm.value.postAction as import('@/types').PostActionType : undefined,
       }
       await invoke('update_todo', { id: todoId.value, data })
-      await saveWorkflowSteps()
     } else {
       const data: CreateTodoRequest = {
         title: form.value.title,
@@ -676,8 +675,6 @@ async function openWorkflowWindow() {
   }
   if (isWorkflowWindowOpen.value) return
 
-  await saveWorkflowSteps()
-
   const url = `#/workflow?todoId=${todoId.value}`
   const label = `workflow-${Date.now()}`
 
@@ -747,20 +744,6 @@ async function loadWorkflowProgress() {
       subtaskId: s.subtaskId,
       promptText: s.promptText,
     }))
-  } catch { /* ignore */ }
-}
-
-async function saveWorkflowSteps() {
-  if (!todo.value?.id) return
-  try {
-    await invoke('set_workflow_steps', {
-      todoId: todo.value.id,
-      steps: workflowSteps.value.map(s => ({
-        stepType: s.stepType,
-        subtaskId: s.subtaskId ?? null,
-        promptText: s.promptText ?? null,
-      })),
-    })
   } catch { /* ignore */ }
 }
 

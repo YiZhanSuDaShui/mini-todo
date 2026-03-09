@@ -607,20 +607,49 @@ function openAgentConfig() {
   agentConfigVisible.value = true
 }
 
-function saveAgentConfig() {
+async function saveAgentConfig() {
   if (!agentForm.value.agentId) {
     ElMessage.warning('请选择 Agent')
     return
   }
 
   agentConfigVisible.value = false
-  ElMessage.success('Agent 配置已暂存，保存待办时生效')
+
+  if (isEdit.value && todoId.value) {
+    try {
+      const shouldClearAgent = (todo.value?.agentId !== null) && !agentForm.value.agentId
+      const data: UpdateTodoRequest = {
+        agentId: agentForm.value.agentId || undefined,
+        agentProjectPath: agentForm.value.projectPath || undefined,
+        clearAgent: shouldClearAgent,
+        postAction: agentForm.value.postAction !== 'none' ? agentForm.value.postAction as import('@/types').PostActionType : undefined,
+      }
+      await invoke('update_todo', { id: todoId.value, data })
+      await saveScheduleConfig(true)
+      ElMessage.success('Agent 与调度配置已保存')
+    } catch (e) {
+      ElMessage.error('保存 Agent 配置失败: ' + String(e))
+    }
+  }
 }
 
-function clearAgentConfig() {
+async function clearAgentConfig() {
   agentForm.value = { agentId: null, projectPath: '', postAction: 'none' }
   agentConfigVisible.value = false
-  ElMessage.info('已清除 Agent 配置')
+
+  if (isEdit.value && todoId.value) {
+    try {
+      const data: UpdateTodoRequest = {
+        clearAgent: true,
+      }
+      await invoke('update_todo', { id: todoId.value, data })
+      ElMessage.success('已清除 Agent 配置')
+    } catch (e) {
+      ElMessage.error('清除 Agent 配置失败: ' + String(e))
+    }
+  } else {
+    ElMessage.info('已清除 Agent 配置')
+  }
 }
 
 const currentAgentLabel = computed(() => {
@@ -754,7 +783,7 @@ function initScheduleForm() {
   }
 }
 
-async function saveScheduleConfig() {
+async function saveScheduleConfig(silent = false) {
   if (!todoId.value) return
   try {
     await schedulerStore.updateTodoScheduleConfig(
@@ -763,7 +792,9 @@ async function saveScheduleConfig() {
       scheduleForm.value.strategy === 'cron' ? scheduleForm.value.cronExpression : undefined,
       scheduleForm.value.enabled,
     )
-    ElMessage.success('调度配置已保存')
+    if (!silent) {
+      ElMessage.success('调度配置已保存')
+    }
   } catch (e) {
     ElMessage.error('保存调度配置失败: ' + String(e))
   }
@@ -1239,7 +1270,7 @@ function handleClose() {
           清除配置
         </el-button>
         <el-button @click="agentConfigVisible = false">取消</el-button>
-        <el-button type="primary" @click="() => { saveAgentConfig(); if (isEdit) { saveScheduleConfig() } }">
+        <el-button type="primary" @click="saveAgentConfig">
           确定
         </el-button>
       </template>

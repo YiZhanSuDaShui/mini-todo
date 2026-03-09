@@ -13,7 +13,6 @@ import { useSchedulerStore } from '@/stores/schedulerStore'
 import { AGENT_TYPE_INFO } from '@/types/agent'
 import { SCHEDULE_STATUS_MAP } from '@/types/scheduler'
 import type { ScheduleStrategy } from '@/types/scheduler'
-import { STEP_STATUS_MAP } from '@/types/workflow'
 import CronEditor from '@/components/CronEditor.vue'
 
 const route = useRoute()
@@ -637,38 +636,76 @@ const hasAgentConfig = computed(() => {
   return !!(agentForm.value.agentId || todo.value?.agentId)
 })
 
+const isWorkflowWindowOpen = ref(false)
+
+const hasWorkflowSteps = computed(() => workflowSteps.value.length > 0)
+
+async function openWorkflowWindow() {
+  if (!isEdit.value || !todoId.value) {
+    ElMessage.info('请先保存待办后再配置工作流')
+    return
+  }
+  if (isWorkflowWindowOpen.value) return
+
+  await saveWorkflowSteps()
+
+  const url = `#/workflow?todoId=${todoId.value}`
+  const label = `workflow-${Date.now()}`
+
+  try {
+    isWorkflowWindowOpen.value = true
+
+    const windowWidth = 800
+    const windowHeight = 650
+    let x: number, y: number
+
+    const monitor = await currentMonitor() || await primaryMonitor()
+    if (monitor) {
+      const s = monitor.scaleFactor
+      const mx = monitor.position.x / s
+      const my = monitor.position.y / s
+      const mw = monitor.size.width / s
+      const mh = monitor.size.height / s
+      x = Math.round(mx + (mw - windowWidth) / 2)
+      y = Math.round(my + (mh - windowHeight) / 2)
+    } else {
+      const s = await appWindow.scaleFactor()
+      const pos = await appWindow.outerPosition()
+      const size = await appWindow.outerSize()
+      x = Math.round(pos.x / s + (size.width / s - windowWidth) / 2)
+      y = Math.round(pos.y / s + (size.height / s - windowHeight) / 2)
+    }
+
+    const webview = new WebviewWindow(label, {
+      url,
+      title: '工作流配置',
+      width: windowWidth,
+      height: windowHeight,
+      x,
+      y,
+      resizable: true,
+      decorations: false,
+      transparent: false,
+      parent: appWindow,
+    })
+
+    webview.once('tauri://destroyed', async () => {
+      isWorkflowWindowOpen.value = false
+      await loadWorkflowProgress()
+    })
+
+    webview.once('tauri://error', () => {
+      isWorkflowWindowOpen.value = false
+    })
+  } catch (e) {
+    isWorkflowWindowOpen.value = false
+    console.error('Failed to open workflow window:', e)
+  }
+}
+
 // ========== 工作流 ==========
 const workflowSteps = ref<Array<{ stepType: string; subtaskId?: number; promptText?: string }>>([])
 const workflowProgress = ref<import('@/types/workflow').WorkflowStep[]>([])
-
-const workflowCompletedCount = computed(() =>
-  workflowProgress.value.filter(s => s.status === 'completed' || s.status === 'skipped').length
-)
-
-function addWorkflowStep() {
-  workflowSteps.value.push({ stepType: 'subtask' })
-}
-
-function moveWorkflowStep(idx: number, dir: 'up' | 'down') {
-  const target = dir === 'up' ? idx - 1 : idx + 1
-  if (target < 0 || target >= workflowSteps.value.length) return
-  const tmp = workflowSteps.value[idx]
-  workflowSteps.value[idx] = workflowSteps.value[target]
-  workflowSteps.value[target] = tmp
-}
-
-function availableSubtasksForStep(currentIdx: number) {
-  const usedIds = workflowSteps.value
-    .filter((s, i) => i !== currentIdx && s.stepType === 'subtask' && s.subtaskId)
-    .map(s => s.subtaskId)
-  return (todo.value?.subtasks || pendingSubtasks.value).filter(st => !usedIds.includes(st.id))
-}
-
-function getSubtaskTitle(subtaskId?: number) {
-  if (!subtaskId) return '(未选择)'
-  const st = (todo.value?.subtasks || []).find(s => s.id === subtaskId)
-  return st?.title || `#${subtaskId}`
-}
 
 async function loadWorkflowProgress() {
   if (!todo.value?.id) return
@@ -696,54 +733,6 @@ async function saveWorkflowSteps() {
       })),
     })
   } catch { /* ignore */ }
-}
-
-async function doStartWorkflow() {
-  if (!todo.value?.id) return
-  try {
-    await saveWorkflowSteps()
-    await invoke('start_workflow', { todoId: todo.value.id })
-    ElMessage.success('工作流已启动')
-    await loadTodo()
-    await loadWorkflowProgress()
-  } catch (e) {
-    ElMessage.error('启动失败: ' + String(e))
-  }
-}
-
-async function doPauseWorkflow() {
-  if (!todo.value?.id) return
-  try {
-    await invoke('pause_workflow', { todoId: todo.value.id })
-    ElMessage.info('工作流已暂停')
-    await loadTodo()
-  } catch (e) {
-    ElMessage.error('暂停失败: ' + String(e))
-  }
-}
-
-async function doSkipStep() {
-  if (!todo.value?.id) return
-  try {
-    await invoke('skip_workflow_step', { todoId: todo.value.id })
-    ElMessage.info('已跳过当前步骤')
-    await loadTodo()
-    await loadWorkflowProgress()
-  } catch (e) {
-    ElMessage.error('跳过失败: ' + String(e))
-  }
-}
-
-async function doResetWorkflow() {
-  if (!todo.value?.id) return
-  try {
-    await invoke('reset_workflow', { todoId: todo.value.id })
-    ElMessage.success('工作流已重置')
-    await loadTodo()
-    await loadWorkflowProgress()
-  } catch (e) {
-    ElMessage.error('重置失败: ' + String(e))
-  }
 }
 
 // ========== 调度配置 ==========
@@ -993,10 +982,20 @@ function handleClose() {
           <el-button
             :type="hasAgentConfig ? 'primary' : 'info'"
             plain
+            size="small"
             @click="openAgentConfig"
           >
             <el-icon><MagicStick /></el-icon>
             {{ hasAgentConfig ? currentAgentLabel : 'Agent' }}
+          </el-button>
+          <el-button
+            :type="hasWorkflowSteps ? 'primary' : 'info'"
+            plain
+            size="small"
+            @click="openWorkflowWindow"
+          >
+            <el-icon><SetUp /></el-icon>
+            {{ hasWorkflowSteps ? `工作流 (${workflowSteps.length})` : '工作流' }}
           </el-button>
         </div>
         <div class="footer-right">
@@ -1004,6 +1003,7 @@ function handleClose() {
             v-if="isEdit && todo && !todo.completed"
             type="success"
             plain
+            size="small"
             :loading="isUpdatingCompleteState"
             @click="handleCompleteTodo"
           >
@@ -1014,17 +1014,18 @@ function handleClose() {
             v-if="isEdit && todo && todo.completed"
             type="warning"
             plain
+            size="small"
             :loading="isUpdatingCompleteState"
             @click="handleReopenTodo"
           >
             <el-icon><RefreshLeft /></el-icon>
             重新打开
           </el-button>
-          <el-button @click="handleClose">
+          <el-button size="small" @click="handleClose">
             <el-icon><Close /></el-icon>
             取消
           </el-button>
-          <el-button type="primary" @click="handleSave">
+          <el-button type="primary" size="small" @click="handleSave">
             <el-icon>
               <Check v-if="isEdit" />
               <Plus v-else />
@@ -1076,40 +1077,6 @@ function handleClose() {
                   <span>添加</span>
                 </button>
               </transition>
-            </div>
-          </div>
-
-          <!-- 工作流进度 -->
-          <div v-if="isEdit && workflowProgress.length > 0" class="workflow-progress-section">
-            <div class="workflow-progress-header">
-              <span>工作流进度 ({{ workflowCompletedCount }}/{{ workflowProgress.length }})</span>
-              <div class="workflow-controls">
-                <el-button v-if="!todo?.workflowEnabled" size="small" type="primary" @click="doStartWorkflow" :disabled="workflowProgress.length === 0">
-                  启动
-                </el-button>
-                <template v-else>
-                  <el-button size="small" @click="doPauseWorkflow">暂停</el-button>
-                  <el-button size="small" @click="doSkipStep">跳过</el-button>
-                </template>
-                <el-button size="small" type="danger" plain @click="doResetWorkflow">重置</el-button>
-              </div>
-            </div>
-            <el-progress
-              :percentage="workflowProgress.length > 0 ? Math.round(workflowCompletedCount / workflowProgress.length * 100) : 0"
-              :stroke-width="6"
-              style="margin: 6px 0"
-            />
-            <div class="workflow-steps-progress">
-              <div v-for="(step, idx) in workflowProgress" :key="step.id" class="workflow-step-progress-item">
-                <el-tag
-                  :type="STEP_STATUS_MAP[step.status as keyof typeof STEP_STATUS_MAP]?.type as any || 'info'"
-                  size="small"
-                  effect="light"
-                >
-                  {{ idx + 1 }}. {{ step.stepType === 'subtask' ? getSubtaskTitle(step.subtaskId) : '提示词' }}
-                  {{ STEP_STATUS_MAP[step.status as keyof typeof STEP_STATUS_MAP]?.label || step.status }}
-                </el-tag>
-              </div>
             </div>
           </div>
 
@@ -1263,59 +1230,6 @@ function handleClose() {
             </span>
           </el-form-item>
 
-          <el-divider />
-
-          <el-form-item label="工作流">
-            <div style="width: 100%">
-              <div v-for="(step, idx) in workflowSteps" :key="idx" class="workflow-step-item">
-                <span class="step-number">{{ idx + 1 }}</span>
-                <el-select
-                  v-model="step.stepType"
-                  style="width: 110px"
-                  size="small"
-                  @change="step.subtaskId = undefined; step.promptText = undefined"
-                >
-                  <el-option label="执行子任务" value="subtask" />
-                  <el-option label="执行提示词" value="prompt" />
-                </el-select>
-                <el-select
-                  v-if="step.stepType === 'subtask'"
-                  v-model="step.subtaskId"
-                  style="flex: 1; min-width: 0"
-                  size="small"
-                  placeholder="选择子任务"
-                  clearable
-                >
-                  <el-option
-                    v-for="st in availableSubtasksForStep(idx)"
-                    :key="st.id"
-                    :label="st.title"
-                    :value="st.id"
-                  />
-                </el-select>
-                <el-input
-                  v-else
-                  v-model="step.promptText"
-                  style="flex: 1; min-width: 0"
-                  size="small"
-                  placeholder="输入提示词"
-                />
-                <el-button size="small" text :disabled="idx === 0" @click="moveWorkflowStep(idx, 'up')">
-                  <el-icon><Top /></el-icon>
-                </el-button>
-                <el-button size="small" text :disabled="idx === workflowSteps.length - 1" @click="moveWorkflowStep(idx, 'down')">
-                  <el-icon><Bottom /></el-icon>
-                </el-button>
-                <el-button size="small" text type="danger" @click="workflowSteps.splice(idx, 1)">
-                  <el-icon><Delete /></el-icon>
-                </el-button>
-              </div>
-              <el-button size="small" type="primary" plain @click="addWorkflowStep" style="margin-top: 4px">
-                添加步骤
-              </el-button>
-            </div>
-            <div class="form-tip">按顺序执行步骤，每步可选子任务或自定义提示词</div>
-          </el-form-item>
         </template>
       </el-form>
       </div>
@@ -1325,11 +1239,12 @@ function handleClose() {
           清除配置
         </el-button>
         <el-button @click="agentConfigVisible = false">取消</el-button>
-        <el-button type="primary" @click="() => { saveAgentConfig(); if (isEdit) { saveScheduleConfig(); saveWorkflowSteps() } }">
+        <el-button type="primary" @click="() => { saveAgentConfig(); if (isEdit) { saveScheduleConfig() } }">
           确定
         </el-button>
       </template>
     </el-dialog>
+
   </div>
 </template>
 
@@ -1379,18 +1294,22 @@ function handleClose() {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
+  padding: 10px 16px;
   border-top: 1px solid var(--border);
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .footer-left {
   display: flex;
-  gap: 8px;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .footer-right {
   display: flex;
-  gap: 8px;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 /* 子任务面板 */
@@ -1892,48 +1811,6 @@ function handleClose() {
   line-height: 1.4;
 }
 
-.workflow-step-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-bottom: 4px;
-}
-
-.workflow-step-item .step-number {
-  font-size: 12px;
-  color: #94a3b8;
-  min-width: 16px;
-  text-align: center;
-}
-
-.workflow-progress-section {
-  margin: 8px 0 12px;
-  padding: 10px 12px;
-  background: rgba(59, 130, 246, 0.04);
-  border-radius: 6px;
-  border: 1px solid rgba(59, 130, 246, 0.1);
-}
-
-.workflow-progress-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 13px;
-  font-weight: 500;
-  color: #64748b;
-}
-
-.workflow-controls {
-  display: flex;
-  gap: 4px;
-}
-
-.workflow-steps-progress {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 6px;
-}
 </style>
 
 <style>

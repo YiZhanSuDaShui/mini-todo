@@ -25,6 +25,11 @@ const routes: RouteRecordRaw[] = [
     path: '/subtask-editor',
     name: 'subtask-editor',
     component: () => import('@/views/SubtaskEditorView.vue')
+  },
+  {
+    path: '/workflow',
+    name: 'workflow',
+    component: () => import('@/views/WorkflowView.vue')
   }
 ]
 

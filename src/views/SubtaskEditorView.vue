@@ -16,6 +16,8 @@ import type { Uploader, UploadOptions } from '@milkdown/kit/plugin/upload'
 import '@milkdown/theme-nord/style.css'
 import { useAgentStore } from '@/stores/agentStore'
 import { useSchedulerStore } from '@/stores/schedulerStore'
+import { handleFileLinkClick } from '@/utils/fileLink'
+import { revealItemInDir } from '@tauri-apps/plugin-opener'
 import { AGENT_TYPE_INFO } from '@/types/agent'
 import type { PromptTemplate, TemplateVariable } from '@/types/scheduler'
 import { listen } from '@tauri-apps/api/event'
@@ -109,12 +111,31 @@ async function initEditor() {
     .config((ctx) => {
       ctx.set(rootCtx, editorContainer.value!)
       ctx.set(defaultValueCtx, markdownContent.value || '')
+
+      const fileLinkDOMHandler = {
+        click: (_view: unknown, event: Event) => {
+          const target = (event.target as HTMLElement)?.closest('a') as HTMLAnchorElement | null
+          if (!target) return false
+          const href = target.getAttribute('href') || ''
+          if (!href.startsWith('file:///')) return false
+          event.preventDefault()
+          let path = decodeURIComponent(href.slice(8)).split('#')[0].replace(/\//g, '\\')
+          if (path) revealItemInDir(path).catch(console.error)
+          return true
+        },
+      }
+
       if (isViewMode) {
         ctx.update(editorViewOptionsCtx, (prev) => ({
           ...prev,
           editable: () => false,
+          handleDOMEvents: { ...prev.handleDOMEvents, ...fileLinkDOMHandler },
         }))
       } else {
+        ctx.update(editorViewOptionsCtx, (prev) => ({
+          ...prev,
+          handleDOMEvents: { ...prev.handleDOMEvents, ...fileLinkDOMHandler },
+        }))
         ctx.get(listenerCtx).markdownUpdated((_ctx, markdown, prevMarkdown) => {
           if (markdown !== prevMarkdown) {
             markdownContent.value = markdown
@@ -386,6 +407,7 @@ onMounted(async () => {
   await nextTick()
   await initEditor()
   editorContainer.value?.addEventListener('click', handleImageClick)
+  editorContainer.value?.addEventListener('click', handleFileLinkClick)
   agentStore.loadAgents()
   agentStore.restoreExecutionForSubtask(subtaskId)
   loadScheduleStatus()
@@ -403,6 +425,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   unlistenScheduleStatus?.()
   editorContainer.value?.removeEventListener('click', handleImageClick)
+  editorContainer.value?.removeEventListener('click', handleFileLinkClick)
   destroyEditor()
 })
 </script>

@@ -6,6 +6,9 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { marked } from 'marked'
 import type { AgentEvent } from '@/types/agent'
+import { handleFileLinkClick, fileLinkExtension } from '@/utils/fileLink'
+
+marked.use(fileLinkExtension)
 import { SCHEDULE_STATUS_MAP } from '@/types/scheduler'
 import { STEP_STATUS_MAP } from '@/types/workflow'
 import type { WorkflowStepStatus } from '@/types/workflow'
@@ -511,6 +514,7 @@ onBeforeUnmount(() => {
         ref="containerRef"
         class="log-container"
         @scroll="handleScroll"
+        @click="handleFileLinkClick"
       >
         <div v-if="logLines.length === 0 && !loading" class="log-empty">
           暂无日志输出
@@ -745,6 +749,17 @@ onBeforeUnmount(() => {
   border: none;
   border-top: 1px solid #404040;
   margin: 8px 0;
+}
+
+.log-markdown :deep(.file-link) {
+  color: #4fc1ff;
+  text-decoration: underline;
+  cursor: pointer;
+  word-break: break-all;
+}
+
+.log-markdown :deep(.file-link:hover) {
+  color: #6fd6ff;
 }
 
 .log-markdown :deep(h1),

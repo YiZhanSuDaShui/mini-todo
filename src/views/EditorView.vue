@@ -678,8 +678,11 @@ const agentForm = ref({
   postAction: 'none' as string,
 })
 
-let agentFormSnapshot: { agentId: number | null; projectPath: string; postAction: string } | null = null
-let agentConfigConfirmed = false
+const agentDialogForm = ref({
+  agentId: null as number | null,
+  projectPath: '',
+  postAction: 'none' as string,
+})
 
 function openAgentConfig() {
   if (agentStore.enabledAgents.length === 0) {
@@ -687,36 +690,25 @@ function openAgentConfig() {
     return
   }
 
-  agentForm.value = {
+  agentDialogForm.value = {
     agentId: todo.value?.agentId ?? agentStore.enabledAgents[0]?.id ?? null,
     projectPath: todo.value?.agentProjectPath ?? '',
     postAction: todo.value?.postAction ?? 'none',
   }
-  agentFormSnapshot = { ...agentForm.value }
-  agentConfigConfirmed = false
   agentConfigVisible.value = true
 }
 
-watch(agentConfigVisible, (visible) => {
-  if (!visible && !agentConfigConfirmed && agentFormSnapshot) {
-    agentForm.value = { ...agentFormSnapshot }
-  }
-  if (!visible) {
-    agentFormSnapshot = null
-  }
-})
-
 async function saveAgentConfig() {
-  if (!agentForm.value.agentId) {
+  if (!agentDialogForm.value.agentId) {
     ElMessage.warning('请选择 Agent')
     return
   }
-  if (!agentForm.value.projectPath.trim()) {
+  if (!agentDialogForm.value.projectPath.trim()) {
     ElMessage.warning('请填写项目路径')
     return
   }
 
-  agentConfigConfirmed = true
+  agentForm.value = { ...agentDialogForm.value }
   agentConfigVisible.value = false
 
   if (isEdit.value && todoId.value) {
@@ -1329,7 +1321,7 @@ function handleClose() {
       <el-form label-position="top" size="default">
         <el-form-item label="选择 Agent" required>
           <el-select
-            v-model="agentForm.agentId"
+            v-model="agentDialogForm.agentId"
             style="width: 100%"
             placeholder="选择要绑定的 Agent"
             clearable
@@ -1345,7 +1337,7 @@ function handleClose() {
 
         <el-form-item label="项目路径">
           <el-input
-            v-model="agentForm.projectPath"
+            v-model="agentDialogForm.projectPath"
             placeholder="Agent 工作的项目目录，如 D:\Git\my-project"
             clearable
           />

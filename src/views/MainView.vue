@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, computed, ref, watch } from 'vue'
+import { onMounted, onUnmounted, computed, ref, watch, nextTick } from 'vue'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useTodoStore, useAppStore } from '@/stores'
@@ -137,8 +137,11 @@ function handleRootMouseLeave() {
 }
 
 const preCalendarWidth = ref<number | null>(null)
+let calendarResizeReady = false
 
 watch(showCalendar, async (show) => {
+  if (!calendarResizeReady) return
+
   try {
     const scale = await appWindow.scaleFactor()
     const size = await appWindow.outerSize()
@@ -176,6 +179,9 @@ onMounted(async () => {
   await appStore.initSettings()
   await todoStore.fetchTodos()
   await todoStore.loadViewMode()
+
+  await nextTick()
+  calendarResizeReady = true
   
   // 异步检查版本更新（不阻塞主流程）
   appStore.checkForUpdates()

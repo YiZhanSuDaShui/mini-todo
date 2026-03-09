@@ -678,6 +678,9 @@ const agentForm = ref({
   postAction: 'none' as string,
 })
 
+let agentFormSnapshot: { agentId: number | null; projectPath: string; postAction: string } | null = null
+let agentConfigConfirmed = false
+
 function openAgentConfig() {
   if (agentStore.enabledAgents.length === 0) {
     ElMessage.warning('请先在设置中配置并启用 Agent')
@@ -689,15 +692,31 @@ function openAgentConfig() {
     projectPath: todo.value?.agentProjectPath ?? '',
     postAction: todo.value?.postAction ?? 'none',
   }
+  agentFormSnapshot = { ...agentForm.value }
+  agentConfigConfirmed = false
   agentConfigVisible.value = true
 }
+
+watch(agentConfigVisible, (visible) => {
+  if (!visible && !agentConfigConfirmed && agentFormSnapshot) {
+    agentForm.value = { ...agentFormSnapshot }
+  }
+  if (!visible) {
+    agentFormSnapshot = null
+  }
+})
 
 async function saveAgentConfig() {
   if (!agentForm.value.agentId) {
     ElMessage.warning('请选择 Agent')
     return
   }
+  if (!agentForm.value.projectPath.trim()) {
+    ElMessage.warning('请填写项目路径')
+    return
+  }
 
+  agentConfigConfirmed = true
   agentConfigVisible.value = false
 
   if (isEdit.value && todoId.value) {

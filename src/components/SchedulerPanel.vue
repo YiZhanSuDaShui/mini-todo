@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+
 import { useSchedulerStore } from '@/stores'
 
 const schedulerStore = useSchedulerStore()
 
-const activeTab = ref('cron')
 const loading = ref(false)
 
 onMounted(async () => {
@@ -17,7 +17,6 @@ async function refreshAll() {
     await Promise.all([
       schedulerStore.refreshSchedulerStatus(),
       schedulerStore.loadScheduledTodos(),
-      schedulerStore.loadTemplates(),
     ])
   } finally {
     loading.value = false
@@ -64,75 +63,45 @@ async function toggleTask(todoId: number, enabled: boolean) {
       </el-button>
     </div>
 
-    <el-tabs v-model="activeTab" class="scheduler-tabs">
-      <el-tab-pane label="定时任务" name="cron">
-        <div v-if="schedulerStore.scheduledTodos.length === 0" class="empty-state">
-          暂无定时任务
-        </div>
-        <div v-else class="task-list">
-          <div
-            v-for="task in schedulerStore.scheduledTodos"
-            :key="task.id"
-            class="task-card"
-          >
-            <div class="task-header">
-              <span class="task-title">{{ task.title }}</span>
-              <el-switch
-                :model-value="task.scheduleEnabled"
-                size="small"
-                @change="toggleTask(task.id, $event as boolean)"
-              />
+    <div class="cron-task-section">
+      <div v-if="schedulerStore.scheduledTodos.length === 0" class="empty-state">
+        暂无定时任务
+      </div>
+      <div v-else class="task-list">
+        <div
+          v-for="task in schedulerStore.scheduledTodos"
+          :key="task.id"
+          class="task-card"
+        >
+          <div class="task-header">
+            <span class="task-title">{{ task.title }}</span>
+            <el-switch
+              :model-value="task.scheduleEnabled"
+              size="small"
+              @change="toggleTask(task.id, $event as boolean)"
+            />
+          </div>
+          <div class="task-meta">
+            <div class="meta-item">
+              <el-icon><Timer /></el-icon>
+              <span>{{ task.cronDescription || task.cronExpression }}</span>
             </div>
-            <div class="task-meta">
-              <div class="meta-item">
-                <el-icon><Timer /></el-icon>
-                <span>{{ task.cronDescription || task.cronExpression }}</span>
-              </div>
-              <div v-if="task.nextRun" class="meta-item">
-                <el-icon><Clock /></el-icon>
-                <span>下次: {{ task.nextRun }}</span>
-              </div>
-              <div v-if="task.lastScheduledRun" class="meta-item">
-                <el-icon><Finished /></el-icon>
-                <span>上次: {{ task.lastScheduledRun }}</span>
-              </div>
-              <div class="meta-item">
-                <el-icon><List /></el-icon>
-                <span>{{ task.pendingSubtasks }} 个待执行子任务</span>
-              </div>
+            <div v-if="task.nextRun" class="meta-item">
+              <el-icon><Clock /></el-icon>
+              <span>下次: {{ task.nextRun }}</span>
+            </div>
+            <div v-if="task.lastScheduledRun" class="meta-item">
+              <el-icon><Finished /></el-icon>
+              <span>上次: {{ task.lastScheduledRun }}</span>
+            </div>
+            <div class="meta-item">
+              <el-icon><List /></el-icon>
+              <span>{{ task.pendingSubtasks }} 个待执行子任务</span>
             </div>
           </div>
         </div>
-      </el-tab-pane>
-
-      <el-tab-pane label="模板" name="templates">
-        <div v-if="schedulerStore.templates.length === 0" class="empty-state">
-          暂无 Prompt 模板
-        </div>
-        <div v-else class="task-list">
-          <div
-            v-for="tpl in schedulerStore.templates"
-            :key="tpl.id"
-            class="task-card"
-          >
-            <div class="task-header">
-              <div class="task-title-group">
-                <span class="task-title">{{ tpl.name }}</span>
-                <el-tag v-if="tpl.category" size="small" type="info" effect="light">
-                  {{ tpl.category }}
-                </el-tag>
-                <el-tag v-if="tpl.isBuiltin" size="small" type="warning" effect="light">
-                  内置
-                </el-tag>
-              </div>
-            </div>
-            <div v-if="tpl.description" class="task-meta">
-              <span class="tpl-desc">{{ tpl.description }}</span>
-            </div>
-          </div>
-        </div>
-      </el-tab-pane>
-    </el-tabs>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -159,7 +128,7 @@ async function toggleTask(todoId: number, enabled: boolean) {
   color: var(--text-secondary);
 }
 
-.scheduler-tabs {
+.cron-task-section {
   margin-top: 4px;
 }
 
@@ -189,12 +158,6 @@ async function toggleTask(todoId: number, enabled: boolean) {
   align-items: center;
 }
 
-.task-title-group {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .task-title {
   font-size: 13px;
   font-weight: 500;
@@ -216,8 +179,4 @@ async function toggleTask(todoId: number, enabled: boolean) {
   color: var(--text-secondary);
 }
 
-.tpl-desc {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
 </style>

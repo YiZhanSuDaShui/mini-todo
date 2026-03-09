@@ -12,6 +12,7 @@ import { STEP_STATUS_MAP } from '@/types/workflow'
 interface SubtaskOption {
   id: number
   title: string
+  content: string
   completed: boolean
 }
 
@@ -106,16 +107,23 @@ async function loadData() {
       subtasks.value = (todo.subtasks || []).map((s: any) => ({
         id: s.id,
         title: s.title,
+        content: s.content || '',
         completed: s.completed,
       }))
     }
 
     workflowProgress.value = await invoke<WorkflowStep[]>('get_workflow_steps', { todoId })
-    workflowSteps.value = workflowProgress.value.map(s => ({
-      stepType: s.stepType,
-      subtaskId: s.subtaskId,
-      promptText: s.promptText,
-    }))
+    workflowSteps.value = workflowProgress.value.map(s => {
+      const step: { stepType: string; subtaskId?: number; promptText?: string } = {
+        stepType: s.stepType,
+        subtaskId: s.subtaskId,
+        promptText: s.promptText,
+      }
+      if (s.stepType === 'subtask' && s.subtaskId && !s.promptText) {
+        step.promptText = buildSubtaskPrompt(s.subtaskId)
+      }
+      return step
+    })
 
     await loadPromptLibrary()
   } catch (e) {
@@ -158,6 +166,33 @@ function availableSubtasksForStep(currentIdx: number) {
 
 function selectPromptForStep(idx: number, template: PromptTemplate) {
   workflowSteps.value[idx].promptText = template.templateContent
+}
+
+function buildSubtaskPrompt(subtaskId: number): string {
+  const st = subtasks.value.find(s => s.id === subtaskId)
+  if (!st) return ''
+  const lines: string[] = []
+  if (st.title.trim()) {
+    lines.push(`【任务标题】${st.title.trim()}`)
+  }
+  if (st.content.trim()) {
+    if (lines.length > 0) lines.push('')
+    lines.push('【任务详情】')
+    lines.push(st.content.trim())
+  }
+  if (lines.length > 0) {
+    lines.push('')
+    lines.push('请根据以上任务信息执行相应操作。')
+  }
+  return lines.join('\n')
+}
+
+function onSubtaskSelected(idx: number, subtaskId: number | undefined) {
+  if (subtaskId) {
+    workflowSteps.value[idx].promptText = buildSubtaskPrompt(subtaskId)
+  } else {
+    workflowSteps.value[idx].promptText = undefined
+  }
 }
 
 function handleClearWorkflow() {
@@ -525,6 +560,7 @@ function quickInsertPrompt(tpl: PromptTemplate) {
                   size="small"
                   placeholder="选择子任务"
                   clearable
+                  @change="(val: number) => onSubtaskSelected(idx, val)"
                 >
                   <el-option
                     v-for="st in availableSubtasksForStep(idx)"
@@ -575,6 +611,19 @@ function quickInsertPrompt(tpl: PromptTemplate) {
                   type="textarea"
                   :autosize="{ minRows: 1, maxRows: 4 }"
                   placeholder="输入提示词内容..."
+                  resize="vertical"
+                />
+              </div>
+              <div v-if="step.stepType === 'subtask' && step.subtaskId" class="step-prompt-row">
+                <div class="step-prompt-label">
+                  <span>执行指令</span>
+                  <el-tag size="small" type="info" effect="plain">基于子任务标题+内容生成</el-tag>
+                </div>
+                <el-input
+                  v-model="step.promptText"
+                  type="textarea"
+                  :autosize="{ minRows: 1, maxRows: 4 }"
+                  placeholder="执行指令（自动生成）"
                   resize="vertical"
                 />
               </div>
@@ -1067,10 +1116,25 @@ function quickInsertPrompt(tpl: PromptTemplate) {
   display: flex;
   align-items: center;
   gap: 8px;
+
+  :deep(.el-select .el-input .el-input__inner) {
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+  }
 }
 
 .step-prompt-row {
   padding-left: 0;
+}
+
+.step-prompt-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: #64748b;
 }
 
 .step-actions-inline {

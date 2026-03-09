@@ -267,14 +267,14 @@ impl TaskScheduler {
                 continue;
             }
 
-            // 查找该 Todo 下未调度过的子任务，将其提交为 pending
-            // 仅触发 none 状态（已完成/失败的不再自动重新触发，需用户手动重置）
+            // Cron 触发时只将已标记为 pending 的子任务推入队列，
+            // 不会自动将 none 状态的子任务纳入调度（需用户手动设置为 pending）
             let subtasks: Vec<(i64, String)> = db
                 .with_connection(|conn| {
                     let mut stmt = conn.prepare(
                         "SELECT id, schedule_status FROM subtasks
                          WHERE parent_id = ?1 AND completed = 0
-                         AND schedule_status = 'none'"
+                         AND schedule_status = 'pending'"
                     )?;
                     let rows = stmt.query_map([todo_id], |row| {
                         Ok((row.get(0)?, row.get(1)?))
@@ -283,15 +283,52 @@ impl TaskScheduler {
                 })
                 .unwrap_or_default();
 
-            for (subtask_id, current_status) in subtasks {
-                if state_machine::can_transition(
-                    &state_machine::ScheduleStatus::from_str(&current_status),
-                    &state_machine::ScheduleStatus::Pending,
-                ) {
-                    update_status_and_notify(app, &db, subtask_id, "pending");
-                    let _ = db.with_connection(|conn| {
-                        scheduler_db::reset_retry_count(conn, subtask_id)
-                    });
+            for (subtask_id, _status) in subtasks {
+                let deps_met = db
+                    .with_connection(|conn| {
+                        dependency_db::are_dependencies_met(conn, subtask_id)
+                    })
+                    .unwrap_or(false);
+
+                if !deps_met {
+                    continue;
+                }
+
+                let priority_score = db
+                    .with_connection(|conn| {
+                        conn.query_row(
+                            "SELECT priority_score FROM subtasks WHERE id = ?1",
+                            [subtask_id],
+                            |row| row.get::<_, i64>(0),
+                        )
+                    })
+                    .unwrap_or(0);
+
+                let quadrant = db
+                    .with_connection(|conn| {
+                        conn.query_row(
+                            "SELECT quadrant FROM todos WHERE id = ?1",
+                            [todo_id],
+                            |row| row.get::<_, String>(0),
+                        )
+                    })
+                    .unwrap_or_default();
+
+                let priority = calculate_priority(&quadrant, priority_score, 0, None);
+
+                let mut queue = self.queue.lock().await;
+                if !queue.contains(subtask_id) {
+                    if queue
+                        .enqueue(QueuedTask {
+                            subtask_id,
+                            todo_id,
+                            priority,
+                            enqueued_at: now_ms(),
+                        })
+                        .is_ok()
+                    {
+                        update_status_and_notify(app, &db, subtask_id, "queued");
+                    }
                 }
             }
 

@@ -240,13 +240,17 @@ onUnmounted(() => {
   void reportAutoHideCursorInside(false)
 })
 
-// 打开已完成列表窗口
+// 打开已完成列表窗口（模态）
 async function openCompletedWindow() {
+  if (isModalOpen.value) return
+
   const label = `completed-${Date.now()}`
   const winWidth = 460
   const winHeight = 550
 
   try {
+    isModalOpen.value = true
+
     let x: number, y: number
     const monitor = await currentMonitor() || await primaryMonitor()
     if (monitor) {
@@ -275,12 +279,23 @@ async function openCompletedWindow() {
       resizable: true,
       decorations: false,
       transparent: false,
+      parent: appWindow,
     })
+    activeModalWindow = webview
 
     webview.once('tauri://destroyed', async () => {
+      isModalOpen.value = false
+      activeModalWindow = null
       await todoStore.fetchTodos()
     })
+
+    webview.once('tauri://error', () => {
+      isModalOpen.value = false
+      activeModalWindow = null
+    })
   } catch (e) {
+    isModalOpen.value = false
+    activeModalWindow = null
     console.error('Failed to open completed window:', e)
   }
 }

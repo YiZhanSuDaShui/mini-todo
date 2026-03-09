@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, computed, ref } from 'vue'
+import { onMounted, onUnmounted, computed, ref, watch } from 'vue'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useTodoStore, useAppStore } from '@/stores'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
-import { getCurrentWindow, primaryMonitor, currentMonitor } from '@tauri-apps/api/window'
+import { getCurrentWindow, primaryMonitor, currentMonitor, LogicalSize } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import TitleBar from '@/components/TitleBar.vue'
@@ -135,6 +135,41 @@ function handleRootMouseEnter() {
 function handleRootMouseLeave() {
   void reportAutoHideCursorInside(false)
 }
+
+const preCalendarWidth = ref<number | null>(null)
+
+watch(showCalendar, async (show) => {
+  try {
+    const scale = await appWindow.scaleFactor()
+    const size = await appWindow.outerSize()
+    const logicalW = size.width / scale
+    const logicalH = size.height / scale
+
+    if (show) {
+      preCalendarWidth.value = logicalW
+
+      document.documentElement.style.setProperty('--left-panel-width', `${logicalW}px`)
+
+      const titleBarH = 44
+      const weekdayH = 30
+      const panelPadding = 24
+      const gridH = logicalH - titleBarH - weekdayH - panelPadding
+      const cellH = gridH / 6
+      const gridW = cellH * 7
+      const rightPanelW = gridW + panelPadding
+      const newW = Math.round(logicalW + rightPanelW)
+      await appWindow.setSize(new LogicalSize(newW, logicalH))
+    } else {
+      document.documentElement.style.removeProperty('--left-panel-width')
+      if (preCalendarWidth.value) {
+        await appWindow.setSize(new LogicalSize(preCalendarWidth.value, logicalH))
+        preCalendarWidth.value = null
+      }
+    }
+  } catch (e) {
+    console.error('Failed to resize window for calendar:', e)
+  }
+})
 
 // 初始化
 onMounted(async () => {
@@ -601,9 +636,9 @@ function stopAutoSync() {
   overflow: hidden;
 
   .split-layout & {
-    width: 40%;
+    width: var(--left-panel-width, 40%);
     min-width: 280px;
-    /* 去掉分割线 */
+    flex-shrink: 0;
   }
 }
 

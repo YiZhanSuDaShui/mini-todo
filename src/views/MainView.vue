@@ -233,7 +233,7 @@ async function openEditor(todo?: Todo, centerOnScreen = false) {
   try {
     isModalOpen.value = true
     
-    const editorWidth = 880 // 500 + 380（包含子任务面板）
+    const editorWidth = 1080 // 700 + 380（包含子任务面板）
     const editorHeight = 600
     let x: number, y: number
     

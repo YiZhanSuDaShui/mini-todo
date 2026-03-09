@@ -26,20 +26,26 @@ impl AgentRunner for CodexRunner {
         cmd.current_dir(working_dir);
 
         if resume_session.is_some() {
-            cmd.args(["resume", "--last", "--json", "--full-auto"]);
+            cmd.args(["exec", "resume", "--last"]);
+            cmd.args(["--json", "--full-auto", "--skip-git-repo-check"]);
+            if let Some(m) = model {
+                if !m.is_empty() {
+                    cmd.args(["--model", m]);
+                }
+            }
+            cmd.arg(prompt);
         } else {
             cmd.args(["exec", "--json", "--full-auto"]);
-        }
-
-        cmd.args(["--sandbox", "workspace-write"]);
-        cmd.arg("--skip-git-repo-check");
-        if let Some(m) = model {
-            if !m.is_empty() {
-                cmd.args(["--model", m]);
+            cmd.args(["--sandbox", "workspace-write"]);
+            cmd.arg("--skip-git-repo-check");
+            if let Some(m) = model {
+                if !m.is_empty() {
+                    cmd.args(["--model", m]);
+                }
             }
+            cmd.arg("--");
+            cmd.arg(prompt);
         }
-        cmd.arg("--");
-        cmd.arg(prompt);
         cmd
     }
 

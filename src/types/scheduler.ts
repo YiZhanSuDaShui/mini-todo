@@ -19,7 +19,7 @@ export interface TaskDependency {
 }
 
 export interface PromptTemplate {
-  id: number
+  id: string
   name: string
   category: string
   description: string

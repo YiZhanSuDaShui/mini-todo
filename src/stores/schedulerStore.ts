@@ -110,32 +110,36 @@ export const useSchedulerStore = defineStore('scheduler', () => {
   }
 
   async function createTemplate(template: Partial<PromptTemplate>) {
-    return invoke<number>('create_prompt_template', {
+    const id = `user_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    await invoke('create_prompt_template', {
+      id,
       name: template.name,
-      category: template.category ?? '',
-      description: template.description ?? '',
+      category: template.category || null,
+      description: template.description || null,
       templateContent: template.templateContent ?? '',
       variables: template.variables ?? '[]',
-      isBuiltin: false,
+      recommendedAgent: null,
     })
+    return id
   }
 
-  async function updateTemplate(id: number, template: Partial<PromptTemplate>) {
+  async function updateTemplate(id: string, template: Partial<PromptTemplate>) {
     await invoke('update_prompt_template', {
       id,
-      name: template.name ?? null,
-      category: template.category ?? null,
-      description: template.description ?? null,
-      templateContent: template.templateContent ?? null,
-      variables: template.variables ?? null,
+      name: template.name ?? '',
+      category: template.category || null,
+      description: template.description || null,
+      templateContent: template.templateContent ?? '',
+      variables: template.variables ?? '[]',
+      recommendedAgent: null,
     })
   }
 
-  async function deleteTemplate(id: number) {
-    await invoke('delete_prompt_template', { id })
+  async function deleteTemplate(id: string) {
+    await invoke('delete_prompt_template', { templateId: id })
   }
 
-  async function renderTemplate(templateId: number, variables: Record<string, string>) {
+  async function renderTemplate(templateId: string, variables: Record<string, string>) {
     return invoke<string>('render_prompt_template', {
       templateId,
       variables: JSON.stringify(variables),

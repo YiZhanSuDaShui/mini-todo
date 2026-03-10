@@ -509,7 +509,7 @@ function quickInsertPrompt(tpl: PromptTemplate) {
                   placeholder="从提示词库选择..."
                   clearable
                   :disabled="isStepLocked(idx)"
-                  @change="(val: number) => { const t = promptLibrary.find(p => p.id === val); if (t) selectPromptForStep(idx, t) }"
+                  @change="(val: string) => { const t = promptLibrary.find(p => p.id === val); if (t) selectPromptForStep(idx, t) }"
                 >
                   <el-option
                     v-for="tpl in promptLibrary"
@@ -645,7 +645,6 @@ function quickInsertPrompt(tpl: PromptTemplate) {
                 <div class="prompt-card-title">
                   <span class="prompt-name">{{ tpl.name }}</span>
                   <el-tag v-if="tpl.category" size="small" type="info" effect="light">{{ tpl.category }}</el-tag>
-                  <el-tag v-if="tpl.isBuiltin" size="small" type="warning" effect="light">内置</el-tag>
                 </div>
                 <div class="prompt-card-actions">
                   <el-button
@@ -658,10 +657,10 @@ function quickInsertPrompt(tpl: PromptTemplate) {
                     <el-icon><Plus /></el-icon>
                     使用
                   </el-button>
-                  <el-button size="small" text @click="startEditPrompt(tpl)" :disabled="tpl.isBuiltin">
+                  <el-button size="small" text @click="startEditPrompt(tpl)">
                     <el-icon><Edit /></el-icon>
                   </el-button>
-                  <el-button size="small" text type="danger" @click="deletePrompt(tpl)" :disabled="tpl.isBuiltin">
+                  <el-button size="small" text type="danger" @click="deletePrompt(tpl)">
                     <el-icon><Delete /></el-icon>
                   </el-button>
                 </div>

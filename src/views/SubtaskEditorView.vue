@@ -269,7 +269,7 @@ function openAgentDialog() {
 
 // ========== Prompt 模板 ==========
 const schedulerStore = useSchedulerStore()
-const selectedTemplateId = ref<number | null>(null)
+const selectedTemplateId = ref<string | null>(null)
 const templateList = ref<PromptTemplate[]>([])
 const templateVariables = ref<TemplateVariable[]>([])
 const variableValues = ref<Record<string, string>>({})
@@ -283,7 +283,7 @@ async function loadTemplates() {
   }
 }
 
-function onTemplateSelect(id: number | null) {
+function onTemplateSelect(id: string | null) {
   if (!id) {
     templateVariables.value = []
     variableValues.value = {}

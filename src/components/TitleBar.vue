@@ -84,13 +84,18 @@ async function handleVersionClick() {
 </script>
 
 <template>
-  <div class="title-bar" :class="{ 'no-drag': isFixed, 'dark-theme': isDarkTheme }">
+  <div
+    class="title-bar"
+    :class="{ 'no-drag': isFixed, 'dark-theme': isDarkTheme }"
+    :data-tauri-drag-region="isFixed ? 'false' : 'deep'"
+  >
     <div class="title-left">
       <span class="app-title-wrapper">
         <span class="app-title">待办清单</span>
-        <span 
-          class="version-tag" 
+        <span
+          class="version-tag"
           :class="{ 'has-update': hasUpdate }"
+          data-tauri-drag-region="false"
           @click="handleVersionClick"
         >
           v{{ APP_VERSION }}
@@ -100,7 +105,7 @@ async function handleVersionClick() {
     </div>
 
     <!-- 日历控制区域（居中显示） -->
-    <div v-if="showCalendarControls" class="title-center">
+    <div v-if="showCalendarControls" class="title-center" data-tauri-drag-region="false">
       <div class="calendar-nav">
         <el-button text size="small" class="nav-btn" @click="emit('calendar-prev')">
           <el-icon><ArrowLeft /></el-icon>
@@ -112,8 +117,8 @@ async function handleVersionClick() {
       </div>
       <el-button size="small" class="today-btn" @click="emit('calendar-today')">今天</el-button>
     </div>
-    
-    <div class="title-right">
+
+    <div class="title-right" data-tauri-drag-region="false">
       <!-- 已完成按钮 -->
       <button 
         v-if="props.completedCount && props.completedCount > 0"

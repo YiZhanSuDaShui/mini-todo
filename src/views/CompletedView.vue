@@ -130,12 +130,12 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="completed-window">
-    <div class="title-bar" @mousedown="onTitleBarMouseDown">
+    <div class="title-bar" data-tauri-drag-region="deep" @mousedown="onTitleBarMouseDown">
       <div class="title-text">
         <span>已完成</span>
         <span class="count-badge">{{ filteredTodos.length }}</span>
       </div>
-      <div class="window-controls">
+      <div class="window-controls" data-tauri-drag-region="false">
         <button class="close-btn" @click="handleClose">
           <svg width="10" height="10" viewBox="0 0 10 10">
             <path d="M1 1L9 9M9 1L1 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>

@@ -432,9 +432,9 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="subtask-editor-window">
-    <div class="window-header">
+    <div class="window-header" data-tauri-drag-region="deep">
       <h2>{{ isViewMode ? '查看子任务' : '编辑子任务' }}</h2>
-      <div class="window-controls">
+      <div class="window-controls" data-tauri-drag-region="false">
         <button class="control-btn maximize-btn" title="最大化" @click="handleMaximize">
           <el-icon :size="14"><FullScreen /></el-icon>
         </button>

@@ -378,12 +378,12 @@ function quickInsertPrompt(tpl: PromptTemplate) {
 <template>
   <div class="workflow-window">
     <!-- 窗口标题栏 -->
-    <div class="window-header">
+    <div class="window-header" data-tauri-drag-region="deep">
       <div class="header-left">
         <h2>工作流配置</h2>
         <span v-if="todoTitle" class="todo-title-tag">{{ todoTitle }}</span>
       </div>
-      <div class="window-controls">
+      <div class="window-controls" data-tauri-drag-region="false">
         <button class="control-btn maximize-btn" title="最大化" @click="handleMaximize">
           <el-icon :size="14"><FullScreen /></el-icon>
         </button>

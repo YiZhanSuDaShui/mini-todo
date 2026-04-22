@@ -906,9 +906,9 @@ function handleClose() {
   <div class="editor-window">
     <!-- 主内容区域 -->
     <div class="main-area">
-      <div class="window-header">
+      <div class="window-header" data-tauri-drag-region="deep">
         <h2>{{ isEdit ? '编辑待办' : '新建待办' }}</h2>
-        <el-button text @click="handleClose">
+        <el-button text data-tauri-drag-region="false" @click="handleClose">
           <el-icon><Close /></el-icon>
         </el-button>
       </div>
@@ -1161,7 +1161,7 @@ function handleClose() {
 
     <!-- 子任务面板（始终显示） -->
     <div class="subtask-panel">
-      <div class="panel-header">
+      <div class="panel-header" data-tauri-drag-region="deep">
         <h3>子任务</h3>
       </div>
 

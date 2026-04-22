@@ -419,9 +419,9 @@ async function handleCheckUpdate() {
 
 <template>
   <div class="settings-window">
-    <div class="window-header">
+    <div class="window-header" data-tauri-drag-region="deep">
       <h2>设置</h2>
-      <el-button text @click="handleClose">
+      <el-button text data-tauri-drag-region="false" @click="handleClose">
         <el-icon><Close /></el-icon>
       </el-button>
     </div>

@@ -234,6 +234,15 @@ function handleClose() {
   appWindow.close()
 }
 
+function onHeaderMouseDown(e: MouseEvent) {
+  if (e.buttons !== 1) return
+  const target = e.target as HTMLElement
+  if (target.closest('[data-tauri-drag-region="false"]')) return
+  if (target.closest('button, input, textarea, select, a, [role="button"]')) return
+  e.preventDefault()
+  appWindow.startDragging()
+}
+
 // ========== WebDAV 同步 ==========
 const syncSettings = reactive<SyncSettings>({
   webdavUrl: '',
@@ -419,7 +428,7 @@ async function handleCheckUpdate() {
 
 <template>
   <div class="settings-window">
-    <div class="window-header" data-tauri-drag-region="deep">
+    <div class="window-header" data-tauri-drag-region="deep" @mousedown="onHeaderMouseDown">
       <h2>设置</h2>
       <el-button text data-tauri-drag-region="false" @click="handleClose">
         <el-icon><Close /></el-icon>

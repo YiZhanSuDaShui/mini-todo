@@ -106,7 +106,11 @@ async function openEditor(todo: Todo) {
 }
 
 function onTitleBarMouseDown(e: MouseEvent) {
-  if ((e.target as HTMLElement).closest('.window-controls')) return
+  if (e.buttons !== 1) return
+  const target = e.target as HTMLElement
+  if (target.closest('[data-tauri-drag-region="false"]')) return
+  if (target.closest('button, input, textarea, select, a, [role="button"]')) return
+  e.preventDefault()
   appWindow.startDragging()
 }
 

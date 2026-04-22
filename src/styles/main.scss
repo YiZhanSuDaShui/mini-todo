@@ -77,6 +77,23 @@ body.dark-theme {
   box-sizing: border-box;
 }
 
+// Tauri 拖拽区域：禁用文字选中与文本光标，保证 macOS 下拖拽不误触选中
+[data-tauri-drag-region],
+[data-tauri-drag-region] * {
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+[data-tauri-drag-region="false"],
+[data-tauri-drag-region="false"] *,
+[data-tauri-drag-region] input,
+[data-tauri-drag-region] textarea,
+[data-tauri-drag-region] [contenteditable="true"] {
+  user-select: auto;
+  -webkit-user-select: auto;
+}
+
 html, body, #app {
   height: 100%;
   width: 100%;

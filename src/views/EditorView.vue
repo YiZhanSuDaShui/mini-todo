@@ -900,13 +900,22 @@ function viewSubtaskLog(subtask: { id: number; title: string }) {
 function handleClose() {
   appWindow.close()
 }
+
+function onHeaderMouseDown(e: MouseEvent) {
+  if (e.buttons !== 1) return
+  const target = e.target as HTMLElement
+  if (target.closest('[data-tauri-drag-region="false"]')) return
+  if (target.closest('button, input, textarea, select, a, [role="button"]')) return
+  e.preventDefault()
+  appWindow.startDragging()
+}
 </script>
 
 <template>
   <div class="editor-window">
     <!-- 主内容区域 -->
     <div class="main-area">
-      <div class="window-header" data-tauri-drag-region="deep">
+      <div class="window-header" data-tauri-drag-region="deep" @mousedown="onHeaderMouseDown">
         <h2>{{ isEdit ? '编辑待办' : '新建待办' }}</h2>
         <el-button text data-tauri-drag-region="false" @click="handleClose">
           <el-icon><Close /></el-icon>
@@ -1161,7 +1170,7 @@ function handleClose() {
 
     <!-- 子任务面板（始终显示） -->
     <div class="subtask-panel">
-      <div class="panel-header" data-tauri-drag-region="deep">
+      <div class="panel-header" data-tauri-drag-region="deep" @mousedown="onHeaderMouseDown">
         <h3>子任务</h3>
       </div>
 

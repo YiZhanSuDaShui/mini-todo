@@ -2,8 +2,21 @@
 import { computed } from 'vue'
 import { useAppStore, useTodoStore, APP_VERSION } from '@/stores'
 import { openUrl } from '@tauri-apps/plugin-opener'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { ElMessageBox } from 'element-plus'
 import type { ViewMode } from '@/types'
+
+const appWindow = getCurrentWindow()
+
+function onTitleBarMouseDown(e: MouseEvent) {
+  if (e.buttons !== 1) return
+  if (appStore.isFixed) return
+  const target = e.target as HTMLElement
+  if (target.closest('[data-tauri-drag-region="false"]')) return
+  if (target.closest('button, input, textarea, select, a, [role="button"]')) return
+  e.preventDefault()
+  appWindow.startDragging()
+}
 
 const props = defineProps<{
   showCalendarControls?: boolean
@@ -88,6 +101,7 @@ async function handleVersionClick() {
     class="title-bar"
     :class="{ 'no-drag': isFixed, 'dark-theme': isDarkTheme }"
     :data-tauri-drag-region="isFixed ? 'false' : 'deep'"
+    @mousedown="onTitleBarMouseDown"
   >
     <div class="title-left">
       <span class="app-title-wrapper">
@@ -202,6 +216,14 @@ async function handleVersionClick() {
 /* 标题栏默认可拖拽 */
 .title-bar {
   -webkit-app-region: drag;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+.title-bar * {
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* 固定模式下禁用拖拽 */

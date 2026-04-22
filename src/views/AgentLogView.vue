@@ -364,6 +364,15 @@ async function handleMaximize() {
   }
 }
 
+function onHeaderMouseDown(e: MouseEvent) {
+  if (e.buttons !== 1) return
+  const target = e.target as HTMLElement
+  if (target.closest('[data-tauri-drag-region="false"]')) return
+  if (target.closest('button, input, textarea, select, a, [role="button"]')) return
+  e.preventDefault()
+  appWindow.startDragging()
+}
+
 const cancelling = ref(false)
 
 async function cancelExecution() {
@@ -459,7 +468,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="log-window">
-    <div class="window-header" data-tauri-drag-region="deep">
+    <div class="window-header" data-tauri-drag-region="deep" @mousedown="onHeaderMouseDown">
       <h2>{{ titleParam }}</h2>
       <div class="window-controls" data-tauri-drag-region="false">
         <button class="control-btn maximize-btn" title="最大化" @click="handleMaximize">

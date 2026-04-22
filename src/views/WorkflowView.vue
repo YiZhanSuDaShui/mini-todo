@@ -195,6 +195,15 @@ async function handleMaximize() {
   }
 }
 
+function onHeaderMouseDown(e: MouseEvent) {
+  if (e.buttons !== 1) return
+  const target = e.target as HTMLElement
+  if (target.closest('[data-tauri-drag-region="false"]')) return
+  if (target.closest('button, input, textarea, select, a, [role="button"]')) return
+  e.preventDefault()
+  appWindow.startDragging()
+}
+
 // ========== Workflow Control ==========
 async function doStartWorkflow() {
   try {
@@ -378,7 +387,7 @@ function quickInsertPrompt(tpl: PromptTemplate) {
 <template>
   <div class="workflow-window">
     <!-- 窗口标题栏 -->
-    <div class="window-header" data-tauri-drag-region="deep">
+    <div class="window-header" data-tauri-drag-region="deep" @mousedown="onHeaderMouseDown">
       <div class="header-left">
         <h2>工作流配置</h2>
         <span v-if="todoTitle" class="todo-title-tag">{{ todoTitle }}</span>

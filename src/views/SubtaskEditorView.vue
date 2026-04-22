@@ -203,6 +203,15 @@ async function handleMaximize() {
   }
 }
 
+function onHeaderMouseDown(e: MouseEvent) {
+  if (e.buttons !== 1) return
+  const target = e.target as HTMLElement
+  if (target.closest('[data-tauri-drag-region="false"]')) return
+  if (target.closest('button, input, textarea, select, a, [role="button"]')) return
+  e.preventDefault()
+  appWindow.startDragging()
+}
+
 // ========== Agent 执行 ==========
 const agentStore = useAgentStore()
 const agentDialogVisible = ref(false)
@@ -432,7 +441,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="subtask-editor-window">
-    <div class="window-header" data-tauri-drag-region="deep">
+    <div class="window-header" data-tauri-drag-region="deep" @mousedown="onHeaderMouseDown">
       <h2>{{ isViewMode ? '查看子任务' : '编辑子任务' }}</h2>
       <div class="window-controls" data-tauri-drag-region="false">
         <button class="control-btn maximize-btn" title="最大化" @click="handleMaximize">

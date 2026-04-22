@@ -211,13 +211,12 @@ body {
   }
 }
 
-// macOS 深色主题：叠加半透明深色兜底色，配合原生 Vibrancy 血槽。
-// 若 Vibrancy 未生效（如静默失败），仍能得到可读的深色背景，避免白底 + 白字的“全白”现象。
+// macOS 深色主题：使用完全透明背景，依赖启动时应用的原生 Vibrancy 展示毛玻璃效果。
 body.platform-macos.dark-theme {
-  --bg-primary: rgba(0, 0, 0, 0.35);
-  --bg-secondary: rgba(0, 0, 0, 0.35);
+  --bg-primary: transparent;
+  --bg-secondary: transparent;
   --bg-tertiary: rgba(255, 255, 255, 0.12);
-  background: rgba(0, 0, 0, 0.35) !important;
+  background: transparent !important;
 }
 
 body.platform-macos.dark-theme #app,
@@ -225,8 +224,8 @@ body.platform-macos.dark-theme #app .app-container,
 body.platform-macos.dark-theme #app .app-container .title-bar,
 body.platform-macos.dark-theme #app .app-container .main-content,
 body.platform-macos.dark-theme #app .app-container .right-panel {
-  background: rgba(0, 0, 0, 0.4) !important;
-  background-color: rgba(0, 0, 0, 0.4) !important;
+  background: transparent !important;
+  background-color: transparent !important;
 }
 
 body.platform-macos.dark-theme #app .app-container .quick-add {

@@ -1,6 +1,6 @@
 [package]
 name = "mini-todo"
-version = "1.6.0"
+version = "1.6.1"
 description = "A minimal todo desktop app with Windows pinning support"
 authors = ["you"]
 edition = "2021"
@@ -50,3 +50,6 @@ raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 window-vibrancy = "0.6"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

@@ -681,24 +681,8 @@ pub fn set_window_fixed_mode(
         }
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        if fixed {
-            let _ = apply_vibrancy(
-                &window,
-                NSVisualEffectMaterial::HudWindow,
-                Some(NSVisualEffectState::FollowsWindowActiveState),
-                Some(10.0),
-            );
-        } else {
-            let _ = clear_vibrancy(&window);
-        }
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        let _ = (window, fixed);
-    }
+    // macOS vibrancy 的生命周期由启动时的 setup_macos_vibrancy 与 set_macos_vibrancy
+    // 命令统一管理，固定模式切换不再介入，避免清除暗色模式所需的毛玻璃效果导致白屏。
 
     sync_tray_fixed_checked(fixed);
 
@@ -711,14 +695,16 @@ pub fn set_macos_vibrancy(app: tauri::AppHandle, enabled: bool) -> Result<(), St
     {
         if let Some(window) = app.get_webview_window("main") {
             if enabled {
-                let _ = apply_vibrancy(
+                if let Err(e) = apply_vibrancy(
                     &window,
                     NSVisualEffectMaterial::HudWindow,
                     Some(NSVisualEffectState::FollowsWindowActiveState),
-                    Some(10.0),
-                );
-            } else {
-                let _ = clear_vibrancy(&window);
+                    None,
+                ) {
+                    eprintln!("Failed to apply macOS vibrancy: {:?}", e);
+                }
+            } else if let Err(e) = clear_vibrancy(&window) {
+                eprintln!("Failed to clear macOS vibrancy: {:?}", e);
             }
         }
     }

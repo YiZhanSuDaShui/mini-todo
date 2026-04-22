@@ -138,6 +138,20 @@ fn setup_window_rounded_corners(window: &tauri::WebviewWindow) {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn setup_macos_vibrancy(window: &tauri::WebviewWindow) {
+    use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+
+    if let Err(e) = apply_vibrancy(
+        window,
+        NSVisualEffectMaterial::HudWindow,
+        Some(NSVisualEffectState::FollowsWindowActiveState),
+        None,
+    ) {
+        eprintln!("Failed to apply macOS vibrancy at startup: {:?}", e);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 初始化数据库
@@ -164,6 +178,13 @@ pub fn run() {
             {
                 if let Some(window) = app.get_webview_window("main") {
                     setup_window_rounded_corners(&window);
+                }
+            }
+
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(window) = app.get_webview_window("main") {
+                    setup_macos_vibrancy(&window);
                 }
             }
 

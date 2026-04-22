@@ -140,12 +140,18 @@ fn setup_window_rounded_corners(window: &tauri::WebviewWindow) {
 
 #[cfg(target_os = "macos")]
 fn setup_macos_vibrancy(window: &tauri::WebviewWindow) {
+    use tauri::webview::Color;
     use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+
+    // 显式把 webview 背景设为全透明，避免 WKWebView 默认白色遮挡底层 Vibrancy 层，导致暗色模式下白屏。
+    if let Err(e) = window.set_background_color(Some(Color(0, 0, 0, 0))) {
+        eprintln!("Failed to set macOS webview background transparent: {:?}", e);
+    }
 
     if let Err(e) = apply_vibrancy(
         window,
         NSVisualEffectMaterial::HudWindow,
-        Some(NSVisualEffectState::FollowsWindowActiveState),
+        Some(NSVisualEffectState::Active),
         None,
     ) {
         eprintln!("Failed to apply macOS vibrancy at startup: {:?}", e);

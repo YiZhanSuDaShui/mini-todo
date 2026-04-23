@@ -51,7 +51,6 @@ use commands::{
     save_sync_settings,
     set_auto_hide_cursor_inside,
     set_auto_hide_enabled,
-    set_macos_vibrancy,
     set_notification_type,
     set_show_calendar,
     set_window_fixed_mode,
@@ -139,22 +138,12 @@ fn setup_window_rounded_corners(window: &tauri::WebviewWindow) {
 }
 
 #[cfg(target_os = "macos")]
-fn setup_macos_vibrancy(window: &tauri::WebviewWindow) {
+fn setup_macos_transparent_webview(window: &tauri::WebviewWindow) {
     use tauri::webview::Color;
-    use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
 
-    // 显式把 webview 背景设为全透明，避免 WKWebView 默认白色遮挡底层 Vibrancy 层，导致暗色模式下白屏。
+    // 把 WKWebView 底色置空，让 CSS 控制最终显示：深色模式透明透出桌面，浅色模式由 .app-container 填白。
     if let Err(e) = window.set_background_color(Some(Color(0, 0, 0, 0))) {
         eprintln!("Failed to set macOS webview background transparent: {:?}", e);
-    }
-
-    if let Err(e) = apply_vibrancy(
-        window,
-        NSVisualEffectMaterial::HudWindow,
-        Some(NSVisualEffectState::Active),
-        None,
-    ) {
-        eprintln!("Failed to apply macOS vibrancy at startup: {:?}", e);
     }
 }
 
@@ -190,7 +179,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 if let Some(window) = app.get_webview_window("main") {
-                    setup_macos_vibrancy(&window);
+                    setup_macos_transparent_webview(&window);
                 }
             }
 
@@ -378,7 +367,6 @@ pub fn run() {
             get_auto_hide_enabled,
             set_auto_hide_enabled,
             set_auto_hide_cursor_inside,
-            set_macos_vibrancy,
             get_window_persist_state,
             reset_window,
             // 屏幕配置命令

@@ -211,7 +211,7 @@ body {
   }
 }
 
-// macOS 深色主题：使用完全透明背景，依赖启动时应用的原生 Vibrancy 展示毛玻璃效果。
+// macOS 深色主题：使用完全透明背景，透出桌面。
 body.platform-macos.dark-theme {
   --bg-primary: transparent;
   --bg-secondary: transparent;

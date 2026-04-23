@@ -7,11 +7,6 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{Manager, State, WebviewWindow, Window};
 
-#[cfg(target_os = "macos")]
-use window_vibrancy::{
-    apply_vibrancy, clear_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
-};
-
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::{HWND, POINT};
 #[cfg(target_os = "windows")]
@@ -681,37 +676,8 @@ pub fn set_window_fixed_mode(
         }
     }
 
-    // macOS vibrancy 的生命周期由启动时的 setup_macos_vibrancy 与 set_macos_vibrancy
-    // 命令统一管理，固定模式切换不再介入，避免清除暗色模式所需的毛玻璃效果导致白屏。
-
     sync_tray_fixed_checked(fixed);
 
-    Ok(())
-}
-
-#[tauri::command]
-pub fn set_macos_vibrancy(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(window) = app.get_webview_window("main") {
-            if enabled {
-                if let Err(e) = apply_vibrancy(
-                    &window,
-                    NSVisualEffectMaterial::HudWindow,
-                    Some(NSVisualEffectState::FollowsWindowActiveState),
-                    None,
-                ) {
-                    eprintln!("Failed to apply macOS vibrancy: {:?}", e);
-                }
-            } else if let Err(e) = clear_vibrancy(&window) {
-                eprintln!("Failed to clear macOS vibrancy: {:?}", e);
-            }
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (app, enabled);
-    }
     Ok(())
 }
 

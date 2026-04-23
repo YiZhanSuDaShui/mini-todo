@@ -211,12 +211,12 @@ body {
   }
 }
 
-// macOS 深色主题：使用完全透明背景，透出桌面。
+// macOS 深色主题：对齐 Windows 的半透明灰度，在透出桌面的同时提升可读性。
 body.platform-macos.dark-theme {
-  --bg-primary: transparent;
-  --bg-secondary: transparent;
+  --bg-primary: rgba(0, 0, 0, 0.1);
+  --bg-secondary: rgba(0, 0, 0, 0.1);
   --bg-tertiary: rgba(255, 255, 255, 0.12);
-  background: transparent !important;
+  background: rgba(0, 0, 0, 0.1) !important;
 }
 
 body.platform-macos.dark-theme #app,
@@ -224,8 +224,8 @@ body.platform-macos.dark-theme #app .app-container,
 body.platform-macos.dark-theme #app .app-container .title-bar,
 body.platform-macos.dark-theme #app .app-container .main-content,
 body.platform-macos.dark-theme #app .app-container .right-panel {
-  background: transparent !important;
-  background-color: transparent !important;
+  background: rgba(0, 0, 0, 0.15) !important;
+  background-color: rgba(0, 0, 0, 0.15) !important;
 }
 
 body.platform-macos.dark-theme #app .app-container .quick-add {

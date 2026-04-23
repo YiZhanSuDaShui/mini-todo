@@ -83,7 +83,19 @@
 ### Windows
 - 下载 `.msi` 或 `.exe` 安装包
 - 运行安装程序完成安装
-  
+
+#### macOS 安装提示
+
+下载 `.dmg` 后双击打开，如果系统弹出 **"Mini Todo" is damaged and can't be opened. You should move it to the Bin**（已损坏，移到废纸篓），这并不是文件真的损坏 —— 而是 Release 产物没有 Apple Developer ID 签名，被 Gatekeeper 因 quarantine 标记拒绝。
+
+把 `.app` 拖入 `/Applications` 后，在终端执行一次即可解除限制：
+
+```bash
+sudo xattr -rd com.apple.quarantine /Applications/Mini\ Todo.app
+```
+
+执行后重新双击即可正常打开。如果后续升级版本再次出现相同提示，重新执行一次命令即可。
+
 
 ## 开发
 

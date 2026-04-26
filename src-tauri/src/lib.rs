@@ -3,9 +3,6 @@ mod db;
 mod services;
 
 use db::Database;
-use services::agent::AgentManager;
-use services::scheduler::engine::TaskScheduler;
-use services::scheduler::workflow::WorkflowRuntime;
 use services::NotificationService;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -18,99 +15,17 @@ use tauri_plugin_autostart::ManagerExt;
 static LAST_CLICK_TIME: AtomicU64 = AtomicU64::new(0);
 const DOUBLE_CLICK_THRESHOLD_MS: u64 = 500;
 use commands::{
-    close_all_notification_windows,
-    close_notification_window,
-    create_subtask,
-    create_todo,
-    delete_screen_config,
-    delete_subtask,
-    delete_todo,
-    export_data,
-    export_data_to_file,
-    get_images_dir,
-    get_subtask,
-    get_sync_settings,
-    fetch_holidays,
-    get_auto_hide_enabled,
-    get_notification_type,
-    get_screen_config,
-    get_settings,
-    get_show_calendar,
-    get_todos,
-    get_window_persist_state,
-    import_data,
-    import_data_from_file,
-    import_subtasks_from_paths,
-    is_fixed_mode,
-    list_screen_configs,
-    reorder_todos,
-    reset_window,
-    save_screen_config,
-    save_settings,
-    save_subtask_image,
-    save_sync_settings,
-    set_auto_hide_cursor_inside,
-    set_auto_hide_enabled,
-    set_notification_type,
-    set_show_calendar,
-    set_window_fixed_mode,
-    update_screen_config_name,
-    update_subtask,
-    update_todo,
-    webdav_apply_remote,
-    webdav_auto_sync,
-    webdav_download_sync,
-    webdav_test_connection,
-    webdav_upload_sync,
-    // Agent 命令
-    auto_detect_agents,
-    cancel_agent_execution,
-    check_agent_health,
-    check_all_agents_health,
-    create_agent,
-    delete_agent,
-    get_agent,
-    get_agent_execution_by_subtask,
-    get_agent_execution_state,
-    get_agents,
-    start_agent_execution,
-    update_agent,
-    // 调度器命令
-    add_task_dependency,
-    check_dependencies_met,
-    get_scheduler_status,
-    get_task_dependencies,
-    remove_task_dependency,
-    start_scheduler,
-    stop_scheduler,
-    submit_task_to_scheduler,
-    update_subtask_max_retries,
-    update_subtask_priority,
-    update_subtask_schedule_status,
-    update_subtask_timeout,
-    update_todo_schedule_config,
-    validate_cron_expression,
-    get_next_cron_execution,
-    get_scheduled_todos,
-    // 审核命令
-    approve_review,
-    reject_review,
-    // 工作流命令
-    get_workflow_steps,
-    set_workflow_steps,
-    start_workflow,
-    stop_workflow,
-    continue_workflow,
-    reset_workflow,
-    get_workflow_executions,
-    // Prompt 模板命令
-    create_prompt_template,
-    delete_prompt_template,
-    get_prompt_template,
-    get_prompt_templates,
-    get_prompt_templates_by_category,
-    render_prompt_template,
-    update_prompt_template,
+    close_all_notification_windows, close_notification_window, create_subtask, create_todo,
+    delete_screen_config, delete_subtask, delete_todo, export_data, export_data_to_file,
+    fetch_holidays, get_ai_settings, get_auto_hide_enabled, get_images_dir, get_notification_type,
+    get_screen_config, get_settings, get_show_calendar, get_subtask, get_sync_settings, get_todos,
+    get_window_persist_state, import_data, import_data_from_file, import_subtasks_from_paths,
+    is_fixed_mode, list_ai_models, list_screen_configs, plan_todo_with_ai, reorder_todos,
+    reset_window, save_ai_settings, save_screen_config, save_settings, save_subtask_image,
+    save_sync_settings, set_auto_hide_cursor_inside, set_auto_hide_enabled, set_notification_type,
+    set_show_calendar, set_window_fixed_mode, update_screen_config_name, update_subtask,
+    update_todo, webdav_apply_remote, webdav_auto_sync, webdav_download_sync,
+    webdav_test_connection, webdav_upload_sync,
 };
 
 #[cfg(target_os = "windows")]
@@ -143,7 +58,10 @@ fn setup_macos_transparent_webview(window: &tauri::WebviewWindow) {
 
     // 把 WKWebView 底色置空，让 CSS 控制最终显示：深色模式透明透出桌面，浅色模式由 .app-container 填白。
     if let Err(e) = window.set_background_color(Some(Color(0, 0, 0, 0))) {
-        eprintln!("Failed to set macOS webview background transparent: {:?}", e);
+        eprintln!(
+            "Failed to set macOS webview background transparent: {:?}",
+            e
+        );
     }
 }
 
@@ -151,9 +69,6 @@ fn setup_macos_transparent_webview(window: &tauri::WebviewWindow) {
 pub fn run() {
     // 初始化数据库
     let database = Database::new().expect("Failed to initialize database");
-    let agent_manager = AgentManager::new();
-    let task_scheduler = std::sync::Arc::new(TaskScheduler::new());
-    let workflow_runtime = WorkflowRuntime::default();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -165,9 +80,6 @@ pub fn run() {
             Some(vec!["--autostart"]),
         ))
         .manage(database)
-        .manage(agent_manager)
-        .manage(task_scheduler.clone())
-        .manage(workflow_runtime)
         .setup(|app| {
             #[cfg(target_os = "windows")]
             {
@@ -316,10 +228,6 @@ pub fn run() {
             // 启动通知调度器
             NotificationService::start_scheduler(app.handle().clone());
 
-            // 启动任务调度引擎
-            let scheduler = app.state::<std::sync::Arc<TaskScheduler>>().inner().clone();
-            scheduler.start(app.handle().clone());
-
             // 启动固定模式监听器（定时检测窗口最小化状态）
             let handle = app.handle().clone();
             std::thread::spawn(move || {
@@ -388,6 +296,11 @@ pub fn run() {
             // 通知设置命令
             get_notification_type,
             set_notification_type,
+            // 本地 AI 设置与时间规划命令
+            get_ai_settings,
+            save_ai_settings,
+            list_ai_models,
+            plan_todo_with_ai,
             // 通知窗口命令
             close_notification_window,
             close_all_notification_windows,
@@ -399,55 +312,6 @@ pub fn run() {
             webdav_download_sync,
             webdav_apply_remote,
             webdav_auto_sync,
-            // Agent 命令
-            get_agents,
-            get_agent,
-            create_agent,
-            update_agent,
-            delete_agent,
-            check_agent_health,
-            check_all_agents_health,
-            auto_detect_agents,
-            start_agent_execution,
-            get_agent_execution_state,
-            get_agent_execution_by_subtask,
-            cancel_agent_execution,
-            // 调度器命令
-            update_subtask_schedule_status,
-            update_subtask_priority,
-            update_subtask_timeout,
-            update_subtask_max_retries,
-            add_task_dependency,
-            remove_task_dependency,
-            get_task_dependencies,
-            check_dependencies_met,
-            update_todo_schedule_config,
-            start_scheduler,
-            stop_scheduler,
-            get_scheduler_status,
-            submit_task_to_scheduler,
-            validate_cron_expression,
-            get_next_cron_execution,
-            get_scheduled_todos,
-            // 审核命令
-            approve_review,
-            reject_review,
-            // 工作流命令
-            get_workflow_steps,
-            set_workflow_steps,
-            start_workflow,
-            stop_workflow,
-            continue_workflow,
-            reset_workflow,
-            get_workflow_executions,
-            // Prompt 模板命令
-            get_prompt_templates,
-            get_prompt_template,
-            get_prompt_templates_by_category,
-            create_prompt_template,
-            update_prompt_template,
-            delete_prompt_template,
-            render_prompt_template,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

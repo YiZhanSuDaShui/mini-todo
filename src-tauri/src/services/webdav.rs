@@ -87,7 +87,12 @@ impl WebDavClient {
         Ok(resp.status().is_success())
     }
 
-    pub fn upload_bytes(&self, remote_path: &str, data: &[u8], content_type: &str) -> Result<(), String> {
+    pub fn upload_bytes(
+        &self,
+        remote_path: &str,
+        data: &[u8],
+        content_type: &str,
+    ) -> Result<(), String> {
         let url = self.full_url(remote_path);
 
         let resp = self
@@ -109,12 +114,15 @@ impl WebDavClient {
 
     #[allow(dead_code)]
     pub fn upload_text(&self, remote_path: &str, text: &str) -> Result<(), String> {
-        self.upload_bytes(remote_path, text.as_bytes(), "application/json; charset=utf-8")
+        self.upload_bytes(
+            remote_path,
+            text.as_bytes(),
+            "application/json; charset=utf-8",
+        )
     }
 
     pub fn upload_file(&self, remote_path: &str, local_path: &Path) -> Result<(), String> {
-        let data = std::fs::read(local_path)
-            .map_err(|e| format!("读取文件失败: {}", e))?;
+        let data = std::fs::read(local_path).map_err(|e| format!("读取文件失败: {}", e))?;
 
         let ext = local_path
             .extension()
@@ -202,8 +210,7 @@ impl WebDavClient {
             std::fs::create_dir_all(parent).ok();
         }
 
-        std::fs::write(local_path, &bytes)
-            .map_err(|e| format!("写入文件失败: {}", e))?;
+        std::fs::write(local_path, &bytes).map_err(|e| format!("写入文件失败: {}", e))?;
 
         Ok(true)
     }

@@ -7,9 +7,11 @@ import type { WindowPosition, WindowSize, WindowMode, ScreenConfig, SaveScreenCo
 
 // 当前应用版本（从系统读取）
 export const APP_VERSION = ref<string>('')
-// GitHub 仓库信息
-const GITHUB_OWNER = 'dreamlonglll'
+// GitHub 仓库信息：用于检查更新和打开 Release 页面
+const GITHUB_OWNER = 'YiZhanSuDaShui'
 const GITHUB_REPO = 'mini-todo'
+const GITHUB_RELEASES_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases`
+const GITHUB_LATEST_RELEASE_API = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`
 
 interface WindowPersistState {
   position: WindowPosition
@@ -436,44 +438,49 @@ export const useAppStore = defineStore('app', () => {
   }
 
   // 检查版本更新
-  async function checkForUpdates(): Promise<void> {
+  async function checkForUpdates(): Promise<boolean> {
     try {
+      hasUpdate.value = false
+      latestVersion.value = null
+      releaseUrl.value = null
+
       await loadAppVersion()
       if (!APP_VERSION.value) {
         console.log('App version unavailable; skip update check')
-        return
+        return false
       }
-      const response = await fetch(
-        `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`,
-        {
-          headers: {
-            'Accept': 'application/vnd.github.v3+json'
-          }
+
+      const response = await fetch(GITHUB_LATEST_RELEASE_API, {
+        headers: {
+          'Accept': 'application/vnd.github.v3+json'
         }
-      )
+      })
       
       if (!response.ok) {
-        console.log('No releases found or API error')
-        return
+        console.log(`No releases found or API error: ${response.status}`)
+        return false
       }
       
       const release = await response.json()
       const tagName = release.tag_name as string
+      const releasePageUrl = release.html_url as string | undefined
       
       // 比较版本号
       if (compareVersions(tagName, APP_VERSION.value) > 0) {
         hasUpdate.value = true
         latestVersion.value = tagName
-        releaseUrl.value = release.html_url
+        releaseUrl.value = releasePageUrl || GITHUB_RELEASES_URL
       }
+      return true
     } catch (e) {
       console.error('Failed to check for updates:', e)
+      return false
     }
   }
 
   // 获取 GitHub Release 页面 URL
   function getReleasesUrl(): string {
-    return releaseUrl.value || `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases`
+    return releaseUrl.value || GITHUB_RELEASES_URL
   }
 
   return {

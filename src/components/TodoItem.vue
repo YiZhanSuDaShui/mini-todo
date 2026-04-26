@@ -34,8 +34,9 @@ const subtaskStats = computed(() => {
 
 // 格式化通知时间
 const formattedNotifyTime = computed(() => {
-  if (!props.todo.notifyAt) return null
-  return dayjs(props.todo.notifyAt).format('MM-DD HH:mm')
+  const firstReminder = props.todo.reminderTimes?.[0]
+  if (!firstReminder) return null
+  return dayjs(firstReminder).format('MM-DD HH:mm')
 })
 
 // 切换完成状态

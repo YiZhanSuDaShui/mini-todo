@@ -81,7 +81,7 @@ impl NotificationService {
             }
 
             // 标记为已通知
-            Self::mark_as_notified(&db, todo.id)?;
+            Self::mark_as_notified(&db, todo.reminder_id)?;
         }
 
         Ok(())
@@ -107,24 +107,26 @@ impl NotificationService {
         db.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 r#"
-                SELECT id, title, description
-                FROM todos
-                WHERE completed = 0
-                  AND notified = 0
-                  AND notify_at IS NOT NULL
-                  AND datetime(notify_at, '-' || notify_before || ' minutes') <= datetime('now', 'localtime')
-                "#
+                SELECT r.id, t.title, t.description
+                FROM todo_reminders r
+                JOIN todos t ON t.id = r.todo_id
+                WHERE t.completed = 0
+                  AND r.notified = 0
+                  AND datetime(replace(r.notify_at, 'T', ' ')) <= datetime('now', 'localtime')
+                ORDER BY r.notify_at ASC
+                "#,
             )?;
 
-            let todos = stmt.query_map([], |row| {
-                Ok(PendingNotification {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    description: row.get::<_, Option<String>>(2)?,
-                })
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
+            let todos = stmt
+                .query_map([], |row| {
+                    Ok(PendingNotification {
+                        reminder_id: row.get(0)?,
+                        title: row.get(1)?,
+                        description: row.get::<_, Option<String>>(2)?,
+                    })
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
 
             Ok(todos)
         })
@@ -243,12 +245,12 @@ impl NotificationService {
         (1920, 1080)
     }
 
-    /// 标记待办为已通知
-    fn mark_as_notified(db: &Database, todo_id: i64) -> Result<(), String> {
+    /// 标记单条提醒为已通知
+    fn mark_as_notified(db: &Database, reminder_id: i64) -> Result<(), String> {
         db.with_connection(|conn| {
             conn.execute(
-                "UPDATE todos SET notified = 1, updated_at = datetime('now', 'localtime') WHERE id = ?",
-                [todo_id],
+                "UPDATE todo_reminders SET notified = 1, updated_at = datetime('now', 'localtime') WHERE id = ?",
+                [reminder_id],
             )?;
             Ok(())
         })
@@ -258,7 +260,7 @@ impl NotificationService {
 
 /// 待发送通知的待办
 struct PendingNotification {
-    id: i64,
+    reminder_id: i64,
     title: String,
     description: Option<String>,
 }

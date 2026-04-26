@@ -178,9 +178,9 @@ onBeforeUnmount(() => {
 
         <div class="item-content">
           <div class="item-title">{{ todo.title }}</div>
-          <div v-if="todo.notifyAt" class="item-time">
+          <div v-if="todo.reminderTimes?.length" class="item-time">
             <el-icon :size="12"><Clock /></el-icon>
-            {{ formatTime(todo.notifyAt) }}
+            {{ formatTime(todo.reminderTimes[0]) }}
           </div>
         </div>
 

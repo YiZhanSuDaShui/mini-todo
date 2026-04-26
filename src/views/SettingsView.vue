@@ -9,9 +9,7 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAppStore, APP_VERSION } from '@/stores'
-import type { ScreenConfig, SyncSettings, SyncDownloadResult } from '@/types'
-import AgentSettings from '@/components/AgentSettings.vue'
-import SchedulerPanel from '@/components/SchedulerPanel.vue'
+import type { AiSettings, ScreenConfig, SyncSettings, SyncDownloadResult } from '@/types'
 
 const appWindow = getCurrentWindow()
 const appStore = useAppStore()
@@ -65,6 +63,9 @@ onMounted(async () => {
   
   // 加载 WebDAV 同步设置
   await loadSyncSettings()
+
+  // 加载本地 AI 设置
+  await loadAiSettings()
 })
 
 // 删除屏幕配置
@@ -154,9 +155,6 @@ async function handleNotificationTypeChange(value: 'system' | 'app') {
   }
 }
 
-// 导出数据
-const includeExecutions = ref(false)
-
 async function handleExport() {
   try {
     exporting.value = true
@@ -173,7 +171,7 @@ async function handleExport() {
     if (filePath) {
       await invoke('export_data_to_file', { 
         filePath, 
-        includeExecutions: includeExecutions.value 
+        includeExecutions: false,
       })
       ElMessage.success('导出成功')
     }
@@ -250,6 +248,7 @@ const syncSettings = reactive<SyncSettings>({
   webdavPassword: '',
   autoSync: false,
   syncInterval: 15,
+  syncMode: 'archive',
   lastSyncAt: null,
   deviceId: '',
 })
@@ -265,6 +264,12 @@ const syncIntervalOptions = [
   { label: '30 分钟', value: 30 },
   { label: '60 分钟', value: 60 },
 ]
+
+function handleSyncModeChange(mode: 'archive' | 'incremental') {
+  if (syncSettings.syncMode === mode) return
+  syncSettings.syncMode = mode
+  saveSyncSettings()
+}
 
 async function loadSyncSettings() {
   try {
@@ -396,11 +401,94 @@ function formatTime(time: string | null | undefined): string {
   }
 }
 
+// ========== 本地 AI 设置 ==========
+const aiSettings = reactive<AiSettings>({
+  baseUrl: 'https://api.deepseek.com',
+  apiKey: '',
+  model: 'deepseek-v4-pro',
+  thinkingEnabled: false,
+  reasoningEffort: 'high',
+})
+const showAiKey = ref(false)
+const savingAiSettings = ref(false)
+const loadingAiModels = ref(false)
+const aiModels = ref<string[]>([])
+const reasoningEffortOptions = [
+  { value: 'high', label: 'High', desc: '适合普通规划，速度和稳定性更均衡' },
+  { value: 'max', label: 'Max', desc: '更强推理，适合复杂描述，响应会更慢' },
+] as const
+
+async function loadAiSettings() {
+  try {
+    const settings = await invoke<AiSettings>('get_ai_settings')
+    Object.assign(aiSettings, settings)
+    if (aiSettings.apiKey) {
+      await loadAiModels(false)
+    }
+  } catch (e) {
+    console.error('Failed to load AI settings:', e)
+  }
+}
+
+async function saveAiSettings() {
+  try {
+    savingAiSettings.value = true
+    await invoke('save_ai_settings', { settings: aiSettings })
+    ElMessage.success('AI 设置已保存')
+  } catch (e) {
+    ElMessage.error('保存 AI 设置失败: ' + String(e))
+  } finally {
+    savingAiSettings.value = false
+  }
+}
+
+async function loadAiModels(showMessage = true) {
+  if (!aiSettings.baseUrl.trim()) {
+    if (showMessage) ElMessage.warning('请先填写 Base URL')
+    return
+  }
+  if (!aiSettings.apiKey.trim()) {
+    if (showMessage) ElMessage.warning('请先填写 API Key')
+    return
+  }
+
+  try {
+    loadingAiModels.value = true
+    const models = await invoke<string[]>('list_ai_models', {
+      settings: aiSettings,
+    })
+    aiModels.value = models
+    if (models.length > 0 && !models.includes(aiSettings.model)) {
+      aiSettings.model = models[0]
+    }
+    if (showMessage) {
+      ElMessage.success('模型列表已更新')
+    }
+  } catch (e) {
+    if (showMessage) {
+      ElMessage.error('读取模型列表失败: ' + String(e))
+    } else {
+      console.warn('Failed to load AI models:', e)
+    }
+  } finally {
+    loadingAiModels.value = false
+  }
+}
+
+async function autoLoadAiModels() {
+  if (!aiSettings.baseUrl.trim() || !aiSettings.apiKey.trim()) return
+  await loadAiModels(false)
+}
+
 // 检查更新
 async function handleCheckUpdate() {
   try {
     checking.value = true
-    await appStore.checkForUpdates()
+    const checked = await appStore.checkForUpdates()
+    if (!checked) {
+      ElMessage.info('未能获取更新信息，请确认你的仓库已发布 Release')
+      return
+    }
     
     if (hasUpdate.value) {
       await ElMessageBox.confirm(
@@ -547,12 +635,6 @@ async function handleCheckUpdate() {
             </button>
           </div>
 
-          <div class="export-options">
-            <el-checkbox v-model="includeExecutions" size="small">
-              包含 Agent 执行日志
-            </el-checkbox>
-          </div>
-
           <p class="card-hint">
             <el-icon :size="14"><InfoFilled /></el-icon>
             导出为 ZIP 压缩包，可用于备份或迁移到其他设备
@@ -680,6 +762,33 @@ async function handleCheckUpdate() {
             </button>
           </div>
 
+          <div class="sync-mode-panel">
+            <div class="sync-mode-header">
+              <span class="settings-label">同步方式</span>
+              <span class="settings-desc">修改后将在下一次同步时生效</span>
+            </div>
+            <div class="sync-mode-options">
+              <button
+                type="button"
+                class="sync-mode-option"
+                :class="{ active: syncSettings.syncMode === 'archive' }"
+                @click="handleSyncModeChange('archive')"
+              >
+                <span class="sync-mode-title">压缩包模式</span>
+                <span class="sync-mode-desc">沿用当前同步方式，上传一份压缩数据包</span>
+              </button>
+              <button
+                type="button"
+                class="sync-mode-option"
+                :class="{ active: syncSettings.syncMode === 'incremental' }"
+                @click="handleSyncModeChange('incremental')"
+              >
+                <span class="sync-mode-title">增量模式</span>
+                <span class="sync-mode-desc">预留少量 JSON 文件同步，功能稍后接入</span>
+              </button>
+            </div>
+          </div>
+
           <p class="card-hint">
             <el-icon :size="14"><InfoFilled /></el-icon>
             通过 WebDAV 协议将待办数据和图片同步到云端存储
@@ -687,25 +796,123 @@ async function handleCheckUpdate() {
         </div>
       </div>
 
-      <!-- Agent 管理 -->
+      <!-- 本地 AI 配置 -->
       <div class="settings-card">
         <div class="card-header">
           <el-icon class="card-icon"><MagicStick /></el-icon>
-          <h3 class="card-title">Agent 管理</h3>
+          <h3 class="card-title">AI 时间规划</h3>
         </div>
-        <div class="card-body">
-          <AgentSettings />
-        </div>
-      </div>
 
-      <!-- 任务调度 -->
-      <div class="settings-card">
-        <div class="card-header">
-          <el-icon class="card-icon"><Timer /></el-icon>
-          <h3 class="card-title">任务调度</h3>
-        </div>
         <div class="card-body">
-          <SchedulerPanel />
+          <div class="ai-form">
+            <div class="form-item">
+              <label class="form-label">Base URL</label>
+              <el-input
+                v-model="aiSettings.baseUrl"
+                placeholder="https://api.deepseek.com"
+                size="small"
+                clearable
+                @change="autoLoadAiModels"
+              />
+            </div>
+
+            <div class="form-item">
+              <label class="form-label">API Key</label>
+              <el-input
+                v-model="aiSettings.apiKey"
+                :type="showAiKey ? 'text' : 'password'"
+                placeholder="sk-..."
+                size="small"
+                clearable
+                @change="autoLoadAiModels"
+              >
+                <template #suffix>
+                  <el-icon class="password-toggle" @click="showAiKey = !showAiKey">
+                    <View v-if="showAiKey" />
+                    <Hide v-else />
+                  </el-icon>
+                </template>
+              </el-input>
+            </div>
+
+            <div class="form-item">
+              <label class="form-label">模型</label>
+              <div class="ai-model-row">
+                <el-select
+                  v-model="aiSettings.model"
+                  size="small"
+                  filterable
+                  allow-create
+                  default-first-option
+                  placeholder="先读取模型列表"
+                >
+                  <el-option
+                    v-for="model in aiModels"
+                    :key="model"
+                    :label="model"
+                    :value="model"
+                  />
+                </el-select>
+                <button
+                  type="button"
+                  class="mini-action-btn"
+                  :disabled="loadingAiModels"
+                  @click="loadAiModels()"
+                >
+                  <el-icon><Refresh /></el-icon>
+                  <span>{{ loadingAiModels ? '读取中' : '读取模型' }}</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-row ai-thinking-row">
+              <div class="row-left">
+                <el-icon class="row-icon"><MagicStick /></el-icon>
+                <div class="row-content">
+                  <span class="settings-label">思考模式</span>
+                  <span class="settings-desc">开启后会发送 DeepSeek thinking 参数，适合复杂描述</span>
+                </div>
+              </div>
+              <el-switch v-model="aiSettings.thinkingEnabled" />
+            </div>
+
+            <div v-if="aiSettings.thinkingEnabled" class="form-item">
+              <label class="form-label">思考强度</label>
+              <el-select
+                v-model="aiSettings.reasoningEffort"
+                size="small"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="opt in reasoningEffortOptions"
+                  :key="opt.value"
+                  :label="opt.label"
+                  :value="opt.value"
+                >
+                  <div class="effort-option">
+                    <span>{{ opt.label }}</span>
+                    <small>{{ opt.desc }}</small>
+                  </div>
+                </el-option>
+              </el-select>
+            </div>
+
+            <div class="form-actions">
+              <button
+                class="data-btn primary"
+                :disabled="savingAiSettings"
+                @click="saveAiSettings"
+              >
+                <el-icon><Check /></el-icon>
+                <span>{{ savingAiSettings ? '保存中...' : '保存 AI 配置' }}</span>
+              </button>
+            </div>
+          </div>
+
+          <p class="card-hint">
+            <el-icon :size="14"><InfoFilled /></el-icon>
+            AI 配置只保存在本机，用于待办编辑页的 Agent 时间规划，不会随 WebDAV 同步上传
+          </p>
         </div>
       </div>
 
@@ -943,11 +1150,6 @@ async function handleCheckUpdate() {
   display: flex;
   gap: 12px;
   margin-bottom: 12px;
-}
-
-.export-options {
-  margin-bottom: 12px;
-  padding-left: 2px;
 }
 
 .data-btn {
@@ -1232,5 +1434,127 @@ async function handleCheckUpdate() {
   gap: 12px;
   margin-top: 16px;
   margin-bottom: 12px;
+}
+
+.sync-mode-panel {
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+  margin-bottom: 12px;
+}
+
+.sync-mode-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.sync-mode-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.sync-mode-option {
+  min-height: 76px;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+
+  &:hover {
+    border-color: #93c5fd;
+  }
+
+  &.active {
+    border-color: #3b82f6;
+    background: #eff6ff;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.12);
+  }
+}
+
+.sync-mode-title {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 4px;
+}
+
+.sync-mode-desc {
+  display: block;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #64748b;
+}
+
+/* AI 设置 */
+.ai-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.ai-model-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.ai-thinking-row {
+  padding: 10px 0;
+  border-top: 1px solid #f1f5f9;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.effort-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  span {
+    color: #334155;
+    font-size: 13px;
+  }
+
+  small {
+    color: #64748b;
+    font-size: 11px;
+  }
+}
+
+.mini-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 104px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid #dbe3ef;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+
+  &:hover:not(:disabled) {
+    background: #f8fafc;
+    border-color: #93c5fd;
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
 }
 </style>

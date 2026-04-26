@@ -47,14 +47,6 @@ export interface SubTask {
   sortOrder: number
   createdAt: string
   updatedAt: string
-  scheduleStatus?: string
-  priorityScore?: number
-  maxRetries?: number
-  retryCount?: number
-  timeoutSecs?: number
-  scheduledAt?: string | null
-  lastScheduledRun?: string | null
-  scheduleError?: string | null
 }
 
 // 待办事项接口
@@ -66,9 +58,7 @@ export interface Todo {
   color: string
   /** 四象限：1=重要紧急, 2=重要不紧急, 3=紧急不重要, 4=不紧急不重要 */
   quadrant: QuadrantType
-  notifyAt: string | null
-  notifyBefore: number
-  notified: boolean
+  reminderTimes: string[]
   completed: boolean
   sortOrder: number
   /** 开始时间（可为空，空则使用 createdAt） */
@@ -77,23 +67,23 @@ export interface Todo {
   endTime: string | null
   createdAt: string
   updatedAt: string
-  /** 绑定的 Agent 配置 ID（可为空） */
-  agentId: number | null
-  /** Agent 工作的项目目录（可为空） */
-  agentProjectPath: string | null
-  /** 调度策略 */
+  /** 旧版本 Agent 字段，仅用于兼容未启用页面 */
+  agentId?: number | null
+  /** 旧版本 Agent 路径字段，仅用于兼容未启用页面 */
+  agentProjectPath?: string | null
+  /** 旧版本调度策略字段，仅用于兼容未启用页面 */
   scheduleStrategy?: string
-  /** Cron 表达式 */
+  /** 旧版本 Cron 字段，仅用于兼容未启用页面 */
   cronExpression?: string | null
-  /** 是否启用调度 */
+  /** 旧版本调度开关字段，仅用于兼容未启用页面 */
   scheduleEnabled?: boolean
-  /** 上次调度执行时间 */
+  /** 旧版本调度执行时间字段，仅用于兼容未启用页面 */
   lastScheduledRun?: string | null
-  /** 子任务完成后的工作流动作（已废弃） */
+  /** 旧版本工作流动作字段，仅用于兼容未启用页面 */
   postAction?: PostActionType
-  /** 是否启用工作流 */
+  /** 旧版本工作流字段，仅用于兼容未启用页面 */
   workflowEnabled?: boolean
-  /** 工作流当前步骤 */
+  /** 旧版本工作流步骤字段，仅用于兼容未启用页面 */
   workflowCurrentStep?: number
   subtasks: SubTask[]
 }
@@ -108,16 +98,11 @@ export interface CreateTodoRequest {
   color: string
   /** 四象限：1=重要紧急, 2=重要不紧急, 3=紧急不重要, 4=不紧急不重要 */
   quadrant?: QuadrantType
-  notifyAt?: string
-  notifyBefore?: number
+  reminderTimes?: string[]
   /** 开始时间 */
   startTime?: string
   /** 截止时间 */
   endTime?: string
-  /** 绑定的 Agent 配置 ID */
-  agentId?: number
-  /** Agent 工作的项目目录 */
-  agentProjectPath?: string
 }
 
 // 更新待办请求
@@ -128,12 +113,11 @@ export interface UpdateTodoRequest {
   color?: string
   /** 四象限：1=重要紧急, 2=重要不紧急, 3=紧急不重要, 4=不紧急不重要 */
   quadrant?: QuadrantType
-  notifyAt?: string | null
-  notifyBefore?: number
+  reminderTimes?: string[]
   completed?: boolean
   sortOrder?: number
-  /** 是否明确清除通知时间 */
-  clearNotifyAt?: boolean
+  /** 是否明确清除提醒时间 */
+  clearReminderTimes?: boolean
   /** 开始时间 */
   startTime?: string | null
   /** 截止时间 */
@@ -142,14 +126,6 @@ export interface UpdateTodoRequest {
   clearStartTime?: boolean
   /** 是否明确清除截止时间 */
   clearEndTime?: boolean
-  /** 绑定的 Agent 配置 ID */
-  agentId?: number
-  /** Agent 工作的项目目录 */
-  agentProjectPath?: string
-  /** 是否明确清除 Agent 绑定 */
-  clearAgent?: boolean
-  /** 子任务完成后的工作流动作 */
-  postAction?: PostActionType
 }
 
 // 创建子任务请求

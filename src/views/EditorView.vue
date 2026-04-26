@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
+import { ref, onMounted, computed, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -7,16 +7,8 @@ import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { currentMonitor, primaryMonitor } from '@tauri-apps/api/window'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
-import type { Todo, CreateTodoRequest, UpdateTodoRequest, CreateSubTaskRequest, QuadrantType } from '@/types'
+import type { AiPlanResult, Todo, CreateTodoRequest, UpdateTodoRequest, CreateSubTaskRequest, QuadrantType } from '@/types'
 import { DEFAULT_COLOR, PRESET_COLORS, QUADRANT_INFO, DEFAULT_QUADRANT } from '@/types'
-import { useAgentStore } from '@/stores/agentStore'
-import { useSchedulerStore } from '@/stores/schedulerStore'
-import { AGENT_TYPE_INFO } from '@/types/agent'
-import { SCHEDULE_STATUS_MAP } from '@/types/scheduler'
-import type { ScheduleStrategy } from '@/types/scheduler'
-import CronEditor from '@/components/CronEditor.vue'
-import { listen } from '@tauri-apps/api/event'
-import { openLogWindow } from '@/utils/logWindow'
 
 const route = useRoute()
 const todoId = computed(() => route.query.id ? parseInt(route.query.id as string) : null)
@@ -28,12 +20,15 @@ const form = ref({
   description: '',
   color: DEFAULT_COLOR,
   quadrant: DEFAULT_QUADRANT as QuadrantType,
-  notifyAt: null as string | null,
-  notifyBefore: 15,
+  reminderTimes: [] as string[],
   startTime: null as string | null,
   endTime: null as string | null
 })
 
+type ReminderInput = {
+  date: string | null
+  time: string | null
+}
 
 // 开始和截止时间的日期时间组件值
 const startDate = ref<string | null>(null)
@@ -41,37 +36,67 @@ const startTimeValue = ref<string | null>(null)
 const endDate = ref<string | null>(null)
 const endTimeValue = ref<string | null>(null)
 
-// 拆分的日期和时间
-const notifyDate = ref<string | null>(null)
-const notifyTime = ref<string | null>(null)
+const reminderInputs = ref<ReminderInput[]>([{ date: null, time: null }])
+const lastReminderIndex = computed(() => reminderInputs.value.length - 1)
 
-// 组合日期和时间生成 notifyAt
-function updateNotifyAt() {
-  if (notifyDate.value && notifyTime.value) {
-    form.value.notifyAt = `${notifyDate.value}T${notifyTime.value}:00`
-  } else if (notifyDate.value) {
-    form.value.notifyAt = `${notifyDate.value}T09:00:00`
-  } else {
-    form.value.notifyAt = null
+function parseReminderInput(reminderTime: string): ReminderInput {
+  const [datePart, timePart] = reminderTime.split('T')
+  return {
+    date: datePart || null,
+    time: timePart ? timePart.substring(0, 5) : '09:00',
   }
 }
 
-// 解析 notifyAt 为日期和时间
-function parseNotifyAt(notifyAtValue: string | null) {
-  if (notifyAtValue) {
-    const [datePart, timePart] = notifyAtValue.split('T')
-    notifyDate.value = datePart
-    notifyTime.value = timePart ? timePart.substring(0, 5) : '09:00'
-  } else {
-    notifyDate.value = null
-    notifyTime.value = null
-  }
+function reminderInputToDateTime(input: ReminderInput): string | null {
+  if (!input.date) return null
+  const time = input.time || '09:00'
+  return `${input.date}T${time}:00`
 }
 
-// 监听日期和时间变化
-watch([notifyDate, notifyTime], () => {
-  updateNotifyAt()
-})
+function syncReminderTimesFromInputs() {
+  const result: string[] = []
+  for (const input of reminderInputs.value) {
+    const value = reminderInputToDateTime(input)
+    if (value && !result.includes(value)) {
+      result.push(value)
+    }
+  }
+  form.value.reminderTimes = result
+}
+
+function setReminderInputs(reminderTimes: string[]) {
+  const normalized = [...new Set(reminderTimes.filter(Boolean))].sort()
+  reminderInputs.value = normalized.length > 0
+    ? normalized.map(parseReminderInput)
+    : [{ date: null, time: null }]
+  syncReminderTimesFromInputs()
+}
+
+function handleReminderInputChange() {
+  syncReminderTimesFromInputs()
+}
+
+function isReminderInputComplete(input: ReminderInput) {
+  return Boolean(input.date)
+}
+
+function addReminderTime() {
+  const lastInput = reminderInputs.value[lastReminderIndex.value]
+  if (lastInput && !isReminderInputComplete(lastInput)) {
+    ElMessage.warning('请先填写当前提醒日期')
+    return
+  }
+  reminderInputs.value.push({ date: null, time: null })
+}
+
+function removeReminderTime(index: number) {
+  if (reminderInputs.value.length === 1) {
+    reminderInputs.value = [{ date: null, time: null }]
+  } else {
+    reminderInputs.value.splice(index, 1)
+  }
+  syncReminderTimesFromInputs()
+}
 
 // 组合开始日期和时间
 function updateStartTime() {
@@ -166,23 +191,8 @@ const subtaskProgressPercent = computed(() => {
 const pendingSubtasks = ref<Array<{ id: number; title: string; content: string | null; completed: boolean }>>([])
 let pendingSubtaskIdCounter = 0
 
-// 提前通知选项
-const notifyBeforeOptions = [
-  { label: '准时', value: 0 },
-  { label: '5 分钟前', value: 5 },
-  { label: '15 分钟前', value: 15 },
-  { label: '30 分钟前', value: 30 },
-  { label: '1 小时前', value: 60 },
-  { label: '自定义', value: -1 }
-]
-
-// 自定义提前时间
-const customNotifyBefore = ref(15)
-const isCustomNotifyBefore = ref(false)
 const isUpdatingCompleteState = ref(false)
 
-// 原始的通知时间（用于判断是否需要清除）
-const originalNotifyAt = ref<string | null>(null)
 // 原始的开始和截止时间（用于判断是否需要清除）
 const originalStartTime = ref<string | null>(null)
 const originalEndTime = ref<string | null>(null)
@@ -201,30 +211,11 @@ function handleQuadrantSelect(quadrantId: QuadrantType) {
   }
 }
 
-let unlistenScheduleStatus: (() => void) | null = null
-
 // 初始化
 onMounted(async () => {
   if (todoId.value) {
     await loadTodo()
   }
-  agentStore.loadAgents()
-
-  const unlisten = await listen<{ subtask_id: number; status: string }>(
-    'schedule:status-changed',
-    (event) => {
-      if (!todo.value?.subtasks) return
-      const st = todo.value.subtasks.find((s: any) => s.id === event.payload.subtask_id)
-      if (st) {
-        (st as any).scheduleStatus = event.payload.status
-      }
-    }
-  )
-  unlistenScheduleStatus = unlisten
-})
-
-onUnmounted(() => {
-  unlistenScheduleStatus?.()
 })
 
 // 加载待办数据
@@ -241,57 +232,23 @@ async function loadTodo() {
         description: todo.value.description || '',
         color: todo.value.color,
         quadrant: todo.value.quadrant,
-        notifyAt: todo.value.notifyAt,
-        notifyBefore: todo.value.notifyBefore,
+        reminderTimes: todo.value.reminderTimes || [],
         startTime: todo.value.startTime,
         endTime: todo.value.endTime
       }
-      
-      // 保存原始的通知时间
-      originalNotifyAt.value = todo.value.notifyAt
       
       // 保存原始的开始和截止时间
       originalStartTime.value = todo.value.startTime
       originalEndTime.value = todo.value.endTime
       
       // 解析日期和时间
-      parseNotifyAt(todo.value.notifyAt)
+      setReminderInputs(todo.value.reminderTimes || [])
       parseStartTime(todo.value.startTime)
       parseEndTime(todo.value.endTime)
-      
-      // 检查是否是自定义时间
-      const presetValues = [0, 5, 15, 30, 60]
-      isCustomNotifyBefore.value = !presetValues.includes(todo.value.notifyBefore)
-      if (isCustomNotifyBefore.value) {
-        customNotifyBefore.value = todo.value.notifyBefore
-      }
 
-      // 恢复 Agent 配置
-      agentForm.value = {
-        agentId: todo.value.agentId ?? null,
-        projectPath: todo.value.agentProjectPath ?? '',
-        postAction: todo.value.postAction ?? 'none',
-      }
-
-      // 恢复调度配置
-      initScheduleForm()
-
-      // 加载工作流
-      await loadWorkflowProgress()
     }
   } catch (e) {
     console.error('Failed to load todo:', e)
-  }
-}
-
-// 处理提前通知选择
-function handleNotifyBeforeChange(value: number) {
-  if (value === -1) {
-    isCustomNotifyBefore.value = true
-    form.value.notifyBefore = customNotifyBefore.value
-  } else {
-    isCustomNotifyBefore.value = false
-    form.value.notifyBefore = value
   }
 }
 
@@ -299,35 +256,24 @@ function handleNotifyBeforeChange(value: number) {
 async function handleSave() {
   if (!form.value.title.trim()) return
 
-  if (isCustomNotifyBefore.value) {
-    form.value.notifyBefore = customNotifyBefore.value
-  }
+  syncReminderTimesFromInputs()
 
   try {
     if (isEdit.value && todoId.value) {
       // 判断是否需要清除时间字段
-      const shouldClearNotifyAt = originalNotifyAt.value !== null && !form.value.notifyAt
       const shouldClearStartTime = originalStartTime.value !== null && !form.value.startTime
       const shouldClearEndTime = originalEndTime.value !== null && !form.value.endTime
       
-      const shouldClearAgent = (todo.value?.agentId !== null) && !agentForm.value.agentId
-
       const data: UpdateTodoRequest = {
         title: form.value.title,
         description: form.value.description || null,
         color: form.value.color,
         quadrant: form.value.quadrant,
-        notifyAt: form.value.notifyAt || undefined,
-        notifyBefore: form.value.notifyBefore,
-        clearNotifyAt: shouldClearNotifyAt,
+        reminderTimes: form.value.reminderTimes,
         startTime: form.value.startTime || undefined,
         endTime: form.value.endTime || undefined,
         clearStartTime: shouldClearStartTime,
         clearEndTime: shouldClearEndTime,
-        agentId: agentForm.value.agentId || undefined,
-        agentProjectPath: agentForm.value.projectPath || undefined,
-        clearAgent: shouldClearAgent,
-        postAction: agentForm.value.postAction !== 'none' ? agentForm.value.postAction as import('@/types').PostActionType : undefined,
       }
       await invoke('update_todo', { id: todoId.value, data })
       ElMessage.success('待办已保存')
@@ -337,12 +283,9 @@ async function handleSave() {
         description: form.value.description || undefined,
         color: form.value.color,
         quadrant: form.value.quadrant,
-        notifyAt: form.value.notifyAt || undefined,
-        notifyBefore: form.value.notifyBefore,
+        reminderTimes: form.value.reminderTimes,
         startTime: form.value.startTime || undefined,
         endTime: form.value.endTime || undefined,
-        agentId: agentForm.value.agentId || undefined,
-        agentProjectPath: agentForm.value.projectPath || undefined,
       }
       const newTodo = await invoke<Todo>('create_todo', { data })
       
@@ -610,10 +553,8 @@ function handleInlineEditKeydown(e: KeyboardEvent, subtaskId: number) {
 async function openSubtaskWindow(subtaskId: number, mode: 'edit' | 'view') {
   if (isSubtaskEditorOpen.value) return
 
-  const agentId = agentForm.value.agentId ?? todo.value?.agentId ?? ''
-  const agentPath = encodeURIComponent(agentForm.value.projectPath || todo.value?.agentProjectPath || '')
   const modeParam = mode === 'view' ? '&mode=view' : ''
-  const url = `#/subtask-editor?id=${subtaskId}&agentId=${agentId}&agentProjectPath=${agentPath}${modeParam}`
+  const url = `#/subtask-editor?id=${subtaskId}${modeParam}`
   const label = `subtask-${mode}-${Date.now()}`
   const isEditMode = mode === 'edit'
 
@@ -668,232 +609,62 @@ async function openSubtaskWindow(subtaskId: number, mode: 'edit' | 'view') {
   }
 }
 
-// ========== Agent 配置 ==========
-const agentStore = useAgentStore()
-const agentConfigVisible = ref(false)
+// ========== Agent AI 时间规划 ==========
+const aiPlanning = ref(false)
 
-const agentForm = ref({
-  agentId: null as number | null,
-  projectPath: '',
-  postAction: 'none' as string,
-})
+function applyAiPlan(plan: AiPlanResult) {
+  const changed: string[] = []
 
-const agentDialogForm = ref({
-  agentId: null as number | null,
-  projectPath: '',
-  postAction: 'none' as string,
-})
-
-function openAgentConfig() {
-  if (agentStore.enabledAgents.length === 0) {
-    ElMessage.warning('请先在设置中配置并启用 Agent')
-    return
+  if (plan.startTime) {
+    form.value.startTime = plan.startTime
+    parseStartTime(plan.startTime)
+    changed.push('开始时间')
   }
 
-  agentDialogForm.value = {
-    agentId: todo.value?.agentId ?? agentStore.enabledAgents[0]?.id ?? null,
-    projectPath: todo.value?.agentProjectPath ?? '',
-    postAction: todo.value?.postAction ?? 'none',
+  if (plan.endTime) {
+    form.value.endTime = plan.endTime
+    parseEndTime(plan.endTime)
+    changed.push('截止时间')
   }
-  agentConfigVisible.value = true
+
+  if (plan.reminderTimes && plan.reminderTimes.length > 0) {
+    setReminderInputs(plan.reminderTimes)
+    changed.push('提醒时间')
+  }
+
+  return [...new Set(changed)]
 }
 
-async function saveAgentConfig() {
-  if (!agentDialogForm.value.agentId) {
-    ElMessage.warning('请选择 Agent')
+async function handleAgentPlan() {
+  const title = form.value.title.trim()
+  const description = form.value.description.trim()
+  if (!title && !description) {
+    ElMessage.warning('请先填写标题或描述')
     return
   }
-  if (!agentDialogForm.value.projectPath.trim()) {
-    ElMessage.warning('请填写项目路径')
-    return
-  }
-
-  agentForm.value = { ...agentDialogForm.value }
-  agentConfigVisible.value = false
-
-  if (isEdit.value && todoId.value) {
-    try {
-      const shouldClearAgent = (todo.value?.agentId !== null) && !agentForm.value.agentId
-      const data: UpdateTodoRequest = {
-        agentId: agentForm.value.agentId || undefined,
-        agentProjectPath: agentForm.value.projectPath || undefined,
-        clearAgent: shouldClearAgent,
-        postAction: agentForm.value.postAction !== 'none' ? agentForm.value.postAction as import('@/types').PostActionType : undefined,
-      }
-      await invoke('update_todo', { id: todoId.value, data })
-      await saveScheduleConfig(true)
-      ElMessage.success('Agent 与调度配置已保存')
-    } catch (e) {
-      ElMessage.error('保存 Agent 配置失败: ' + String(e))
-    }
-  }
-}
-
-async function clearAgentConfig() {
-  agentForm.value = { agentId: null, projectPath: '', postAction: 'none' }
-  agentConfigVisible.value = false
-
-  if (isEdit.value && todoId.value) {
-    try {
-      const data: UpdateTodoRequest = {
-        clearAgent: true,
-      }
-      await invoke('update_todo', { id: todoId.value, data })
-      ElMessage.success('已清除 Agent 配置')
-    } catch (e) {
-      ElMessage.error('清除 Agent 配置失败: ' + String(e))
-    }
-  } else {
-    ElMessage.info('已清除 Agent 配置')
-  }
-}
-
-const currentAgentLabel = computed(() => {
-  const id = agentForm.value.agentId ?? todo.value?.agentId
-  if (!id) return ''
-  const agent = agentStore.agents.find(a => a.id === id)
-  if (!agent) return ''
-  const typeInfo = AGENT_TYPE_INFO[agent.agentType]
-  return typeInfo?.label || agent.agentType
-})
-
-const hasAgentConfig = computed(() => {
-  return !!(agentForm.value.agentId || todo.value?.agentId)
-})
-
-const isWorkflowWindowOpen = ref(false)
-
-const hasWorkflowSteps = computed(() => workflowSteps.value.length > 0)
-
-async function openWorkflowWindow() {
-  if (!isEdit.value || !todoId.value) {
-    ElMessage.info('请先保存待办后再配置工作流')
-    return
-  }
-  if (isWorkflowWindowOpen.value) return
-
-  const url = `#/workflow?todoId=${todoId.value}`
-  const label = `workflow-${Date.now()}`
 
   try {
-    isWorkflowWindowOpen.value = true
+    aiPlanning.value = true
+    const plan = await invoke<AiPlanResult>('plan_todo_with_ai', {
+      title,
+      description: description || null,
+      currentStartTime: form.value.startTime,
+      currentEndTime: form.value.endTime,
+      currentReminderTimes: form.value.reminderTimes,
+    })
 
-    const windowWidth = 800
-    const windowHeight = 650
-    let x: number, y: number
-
-    const monitor = await currentMonitor() || await primaryMonitor()
-    if (monitor) {
-      const s = monitor.scaleFactor
-      const mx = monitor.position.x / s
-      const my = monitor.position.y / s
-      const mw = monitor.size.width / s
-      const mh = monitor.size.height / s
-      x = Math.round(mx + (mw - windowWidth) / 2)
-      y = Math.round(my + (mh - windowHeight) / 2)
-    } else {
-      const s = await appWindow.scaleFactor()
-      const pos = await appWindow.outerPosition()
-      const size = await appWindow.outerSize()
-      x = Math.round(pos.x / s + (size.width / s - windowWidth) / 2)
-      y = Math.round(pos.y / s + (size.height / s - windowHeight) / 2)
+    const changed = applyAiPlan(plan)
+    if (changed.length === 0) {
+      ElMessage.info(plan.reason || 'AI 没有推断出明确时间')
+      return
     }
 
-    const webview = new WebviewWindow(label, {
-      url,
-      title: '工作流配置',
-      width: windowWidth,
-      height: windowHeight,
-      x,
-      y,
-      resizable: true,
-      decorations: false,
-      transparent: false,
-      parent: appWindow,
-    })
-
-    webview.once('tauri://destroyed', async () => {
-      isWorkflowWindowOpen.value = false
-      await loadWorkflowProgress()
-    })
-
-    webview.once('tauri://error', () => {
-      isWorkflowWindowOpen.value = false
-    })
+    ElMessage.success(`AI 已填入${changed.join('、')}`)
   } catch (e) {
-    isWorkflowWindowOpen.value = false
-    console.error('Failed to open workflow window:', e)
+    ElMessage.error('AI 时间规划失败: ' + String(e))
+  } finally {
+    aiPlanning.value = false
   }
-}
-
-// ========== 工作流 ==========
-const workflowSteps = ref<Array<{ stepType: string; subtaskId?: number; promptText?: string }>>([])
-const workflowProgress = ref<import('@/types/workflow').WorkflowStep[]>([])
-
-async function loadWorkflowProgress() {
-  if (!todo.value?.id) return
-  try {
-    workflowProgress.value = await invoke<import('@/types/workflow').WorkflowStep[]>(
-      'get_workflow_steps', { todoId: todo.value.id }
-    )
-    workflowSteps.value = workflowProgress.value.map(s => ({
-      stepType: s.stepType,
-      subtaskId: s.subtaskId,
-      promptText: s.promptText,
-    }))
-  } catch { /* ignore */ }
-}
-
-// ========== 调度配置 ==========
-const schedulerStore = useSchedulerStore()
-
-const scheduleForm = ref({
-  strategy: 'manual' as ScheduleStrategy,
-  cronExpression: '',
-  enabled: false,
-})
-
-function initScheduleForm() {
-  if (todo.value) {
-    scheduleForm.value = {
-      strategy: (todo.value.scheduleStrategy as ScheduleStrategy) || 'manual',
-      cronExpression: todo.value.cronExpression || '',
-      enabled: !!todo.value.scheduleEnabled,
-    }
-  }
-}
-
-async function saveScheduleConfig(silent = false) {
-  if (!todoId.value) return
-  try {
-    await schedulerStore.updateTodoScheduleConfig(
-      todoId.value,
-      scheduleForm.value.strategy,
-      scheduleForm.value.strategy === 'cron' ? scheduleForm.value.cronExpression : undefined,
-      scheduleForm.value.enabled,
-    )
-    if (!silent) {
-      ElMessage.success('调度配置已保存')
-    }
-  } catch (e) {
-    ElMessage.error('保存调度配置失败: ' + String(e))
-  }
-}
-
-function getScheduleStatusInfo(status: string) {
-  return SCHEDULE_STATUS_MAP[status as keyof typeof SCHEDULE_STATUS_MAP] || SCHEDULE_STATUS_MAP.none
-}
-
-function canViewLog(subtask: Record<string, any>): boolean {
-  const status = subtask.scheduleStatus
-  return !!status && !['none', 'pending', 'queued'].includes(status)
-}
-
-function viewSubtaskLog(subtask: { id: number; title: string }) {
-  openLogWindow({
-    subtaskId: subtask.id,
-    title: `${subtask.title} - 执行日志`,
-  })
 }
 
 // 关闭窗口
@@ -1048,62 +819,68 @@ function onHeaderMouseDown(e: MouseEvent) {
             </div>
           </el-form-item>
 
-          <!-- 提醒时间 - 拆分为日期和时间 -->
+          <!-- 提醒时间 -->
           <el-form-item label="提醒时间">
-            <div class="notify-datetime-picker">
-              <el-date-picker
-                v-model="notifyDate"
-                type="date"
-                placeholder="选择日期"
-                format="YYYY-MM-DD"
-                value-format="YYYY-MM-DD"
-                :teleported="true"
-                :popper-options="{
-                  placement: 'top-start',
-                  modifiers: [{ name: 'flip', enabled: false }]
-                }"
-                class="date-picker"
-              />
-              <el-time-picker
-                v-model="notifyTime"
-                placeholder="时间"
-                format="HH:mm"
-                value-format="HH:mm"
-                :teleported="true"
-                :popper-options="{
-                  placement: 'top-start',
-                  modifiers: [{ name: 'flip', enabled: false }]
-                }"
-                class="time-picker"
-                :disabled="!notifyDate"
-              />
-            </div>
-          </el-form-item>
+            <div class="reminder-list">
+              <div
+                v-for="(reminder, index) in reminderInputs"
+                :key="index"
+                class="reminder-row"
+                :class="{ 'last-row': index === lastReminderIndex, 'single-row': reminderInputs.length === 1 }"
+              >
+                <div class="reminder-fields">
+                  <el-date-picker
+                    v-model="reminder.date"
+                    type="date"
+                    placeholder="选择日期"
+                    format="YYYY-MM-DD"
+                    value-format="YYYY-MM-DD"
+                    :teleported="true"
+                    :popper-options="{
+                      placement: 'top-start',
+                      modifiers: [{ name: 'flip', enabled: false }]
+                    }"
+                    class="date-picker"
+                    @change="handleReminderInputChange"
+                  />
+                  <el-time-picker
+                    v-model="reminder.time"
+                    placeholder="时间"
+                    format="HH:mm"
+                    value-format="HH:mm"
+                    :teleported="true"
+                    :popper-options="{
+                      placement: 'top-start',
+                      modifiers: [{ name: 'flip', enabled: false }]
+                    }"
+                    class="time-picker"
+                    :disabled="!reminder.date"
+                    @change="handleReminderInputChange"
+                  />
+                </div>
 
-          <!-- 提前通知 -->
-          <el-form-item v-if="form.notifyAt" label="提前提醒">
-            <el-select 
-              :model-value="isCustomNotifyBefore ? -1 : form.notifyBefore"
-              @change="handleNotifyBeforeChange"
-              style="width: 100%"
-            >
-              <el-option 
-                v-for="opt in notifyBeforeOptions"
-                :key="opt.value"
-                :label="opt.label"
-                :value="opt.value"
-              />
-            </el-select>
-            
-            <el-input-number
-              v-if="isCustomNotifyBefore"
-              v-model="customNotifyBefore"
-              :min="1"
-              :max="1440"
-              style="width: 100%; margin-top: 8px"
-            >
-              <template #suffix>分钟前</template>
-            </el-input-number>
+                <div class="reminder-actions">
+                  <button
+                    v-if="reminderInputs.length > 1"
+                    type="button"
+                    class="reminder-icon-btn remove"
+                    title="移除提醒"
+                    @click="removeReminderTime(index)"
+                  >
+                    <el-icon><Close /></el-icon>
+                  </button>
+                  <button
+                    v-if="index === lastReminderIndex"
+                    type="button"
+                    class="reminder-icon-btn add"
+                    title="添加提醒"
+                    @click="addReminderTime"
+                  >
+                    <el-icon><Plus /></el-icon>
+                  </button>
+                </div>
+              </div>
+            </div>
           </el-form-item>
 
         </el-form>
@@ -1112,22 +889,15 @@ function onHeaderMouseDown(e: MouseEvent) {
       <div class="window-footer">
         <div class="footer-left">
           <el-button
-            :type="hasAgentConfig ? 'primary' : 'info'"
+            type="info"
             plain
             size="small"
-            @click="openAgentConfig"
+            :loading="aiPlanning"
+            :disabled="aiPlanning"
+            @click="handleAgentPlan"
           >
             <el-icon><MagicStick /></el-icon>
-            {{ hasAgentConfig ? currentAgentLabel : 'Agent' }}
-          </el-button>
-          <el-button
-            :type="hasWorkflowSteps ? 'primary' : 'info'"
-            plain
-            size="small"
-            @click="openWorkflowWindow"
-          >
-            <el-icon><SetUp /></el-icon>
-            {{ hasWorkflowSteps ? `工作流 (${workflowSteps.length})` : '工作流' }}
+            {{ aiPlanning ? '规划中...' : 'Agent' }}
           </el-button>
         </div>
         <div class="footer-right">
@@ -1253,15 +1023,6 @@ function onHeaderMouseDown(e: MouseEvent) {
                 >
                   {{ subtask.title }}
                 </span>
-                <el-tag
-                  v-if="'scheduleStatus' in subtask && subtask.scheduleStatus && subtask.scheduleStatus !== 'none'"
-                  :type="getScheduleStatusInfo(subtask.scheduleStatus as string).type as any"
-                  size="small"
-                  effect="light"
-                  class="schedule-tag"
-                >
-                  {{ getScheduleStatusInfo(subtask.scheduleStatus as string).label }}
-                </el-tag>
                 <el-icon
                   v-if="subtask.content"
                   class="content-indicator"
@@ -1271,14 +1032,6 @@ function onHeaderMouseDown(e: MouseEvent) {
                   <Document />
                 </el-icon>
                 <div v-if="inlineEditingSubtaskId !== subtask.id" class="subtask-actions">
-                  <button
-                    v-if="canViewLog(subtask)"
-                    class="action-btn log-btn"
-                    @click.stop="viewSubtaskLog(subtask)"
-                    title="查看执行日志"
-                  >
-                    <el-icon><Tickets /></el-icon>
-                  </button>
                   <button
                     class="action-btn view-btn"
                     @click="openSubtaskWindow(subtask.id, 'view')"
@@ -1317,82 +1070,6 @@ function onHeaderMouseDown(e: MouseEvent) {
     <!-- 模态遮罩：子任务编辑窗口打开时阻止操作 -->
     <div v-if="isSubtaskEditorOpen" class="modal-overlay"></div>
 
-    <!-- Agent 配置对话框 -->
-    <el-dialog
-      v-model="agentConfigVisible"
-      title="Agent 配置"
-      width="460px"
-      append-to-body
-      class="agent-config-dialog"
-      top="10vh"
-    >
-      <div style="max-height: calc(80vh - 160px); overflow-y: auto; padding-right: 4px;">
-      <el-form label-position="top" size="default">
-        <el-form-item label="选择 Agent" required>
-          <el-select
-            v-model="agentDialogForm.agentId"
-            style="width: 100%"
-            placeholder="选择要绑定的 Agent"
-            clearable
-          >
-            <el-option
-              v-for="agent in agentStore.enabledAgents"
-              :key="agent.id"
-              :label="AGENT_TYPE_INFO[agent.agentType]?.label || agent.agentType"
-              :value="agent.id"
-            />
-          </el-select>
-        </el-form-item>
-
-        <el-form-item label="项目路径">
-          <el-input
-            v-model="agentDialogForm.projectPath"
-            placeholder="Agent 工作的项目目录，如 D:\Git\my-project"
-            clearable
-          />
-          <div class="form-tip">子任务执行 Agent 时使用此目录</div>
-        </el-form-item>
-
-        <el-divider v-if="isEdit" />
-
-        <template v-if="isEdit">
-          <el-form-item label="调度策略">
-            <el-select
-              v-model="scheduleForm.strategy"
-              style="width: 100%"
-              placeholder="选择调度策略"
-            >
-              <el-option label="手动执行" value="manual" />
-              <el-option label="定时执行 (Cron)" value="cron" />
-            </el-select>
-          </el-form-item>
-
-          <el-form-item v-if="scheduleForm.strategy === 'cron'" label="Cron 表达式">
-            <CronEditor v-model="scheduleForm.cronExpression" />
-          </el-form-item>
-
-          <el-form-item label="启用调度">
-            <el-switch v-model="scheduleForm.enabled" />
-            <span class="form-tip" style="margin-left: 8px">
-              {{ scheduleForm.enabled ? '调度已启用' : '调度已暂停' }}
-            </span>
-          </el-form-item>
-
-        </template>
-      </el-form>
-      </div>
-
-      <template #footer>
-        <el-button type="danger" plain @click="clearAgentConfig">
-          清除配置
-        </el-button>
-        <el-button @click="agentConfigVisible = false">取消</el-button>
-        <el-button type="primary" @click="saveAgentConfig">
-          确定
-        </el-button>
-      </template>
-    </el-dialog>
-
   </div>
 </template>
 
@@ -1401,6 +1078,7 @@ function onHeaderMouseDown(e: MouseEvent) {
   display: flex;
   height: 100vh;
   background: #FFFFFF;
+  overflow: hidden;
 }
 
 .main-area {
@@ -1408,6 +1086,7 @@ function onHeaderMouseDown(e: MouseEvent) {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  overflow: hidden;
 }
 
 .window-header {
@@ -1433,9 +1112,22 @@ function onHeaderMouseDown(e: MouseEvent) {
 }
 
 .editor-content {
+  --date-time-gap: 8px;
+  --reminder-action-width: 60px;
+
   flex: 1;
   padding: 16px;
   overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
+  box-sizing: border-box;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+  }
 }
 
 .window-footer {
@@ -1814,14 +1506,6 @@ function onHeaderMouseDown(e: MouseEvent) {
     font-family: inherit;
   }
 
-  .schedule-tag {
-    flex-shrink: 0;
-    font-size: 10px;
-    padding: 0 4px;
-    height: 18px;
-    line-height: 18px;
-  }
-
   .content-indicator {
     color: #3b82f6;
     flex-shrink: 0;
@@ -1871,10 +1555,6 @@ function onHeaderMouseDown(e: MouseEvent) {
         color: #ef4444;
       }
 
-      &.log-btn:hover {
-        background: #fef3c7;
-        color: #d97706;
-      }
     }
   }
 }
@@ -1931,19 +1611,88 @@ function onHeaderMouseDown(e: MouseEvent) {
   transition: transform 0.25s ease;
 }
 
-.notify-datetime-picker {
-  display: flex;
-  gap: 8px;
+.reminder-list {
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.reminder-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--reminder-action-width);
+  align-items: center;
+  gap: var(--date-time-gap);
+  width: 100%;
+  min-width: 0;
+}
+
+.reminder-fields {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--date-time-gap);
 
   .date-picker {
-    flex: 1;
+    width: 100%;
+    min-width: 0;
   }
 
   .time-picker {
-    width: 100px;
-    flex-shrink: 0;
+    width: 100%;
+    min-width: 0;
   }
+}
+
+.reminder-actions {
+  width: var(--reminder-action-width);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.reminder-fields :deep(.el-date-editor),
+.reminder-fields :deep(.el-input) {
+  width: 100%;
+  min-width: 0;
+}
+
+.reminder-icon-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #dbe3ef;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #64748b;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.16s ease, border-color 0.16s ease, color 0.16s ease, background 0.16s ease;
+
+  &:hover {
+    background: #f8fafc;
+    border-color: #93c5fd;
+    color: #2563eb;
+  }
+
+  &.remove:hover {
+    border-color: #fecaca;
+    color: #dc2626;
+  }
+}
+
+.reminder-row.last-row:hover .reminder-icon-btn,
+.reminder-row.single-row .reminder-icon-btn {
+  opacity: 1;
+}
+
+.reminder-row:not(.last-row):hover .reminder-icon-btn.remove {
+  opacity: 1;
 }
 
 .time-range-picker {
@@ -1954,18 +1703,28 @@ function onHeaderMouseDown(e: MouseEvent) {
 }
 
 .time-range-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--reminder-action-width);
   align-items: center;
-  gap: 8px;
+  gap: var(--date-time-gap);
+  width: 100%;
+  min-width: 0;
 
   .date-picker-sm {
-    flex: 1;
+    width: 100%;
+    min-width: 0;
   }
 
   .time-picker-sm {
-    width: 90px;
-    flex-shrink: 0;
+    width: 100%;
+    min-width: 0;
   }
+}
+
+.time-range-row :deep(.el-date-editor),
+.time-range-row :deep(.el-input) {
+  width: 100%;
+  min-width: 0;
 }
 
 .modal-overlay {
@@ -1986,10 +1745,4 @@ function onHeaderMouseDown(e: MouseEvent) {
   line-height: 1.4;
 }
 
-</style>
-
-<style>
-.agent-config-dialog .el-dialog__body {
-  padding-top: 12px;
-}
 </style>

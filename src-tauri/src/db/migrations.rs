@@ -123,6 +123,48 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("INSERT INTO migrations (version) VALUES (21)", [])?;
     }
 
+    if current_version < 22 {
+        migration_v22(conn)?;
+        conn.execute("INSERT INTO migrations (version) VALUES (22)", [])?;
+    }
+
+    Ok(())
+}
+
+/// 迁移 v22：使用独立提醒表支持一个待办多个提醒时间。
+fn migration_v22(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS todo_reminders (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            todo_id         INTEGER NOT NULL,
+            notify_at       TEXT NOT NULL,
+            notified        INTEGER NOT NULL DEFAULT 0,
+            sort_order      INTEGER NOT NULL DEFAULT 0,
+            created_at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            updated_at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            FOREIGN KEY (todo_id) REFERENCES todos(id) ON DELETE CASCADE,
+            UNIQUE(todo_id, notify_at)
+        );
+        CREATE INDEX IF NOT EXISTS idx_todo_reminders_due
+            ON todo_reminders(notified, notify_at);
+        CREATE INDEX IF NOT EXISTS idx_todo_reminders_todo_id
+            ON todo_reminders(todo_id);
+
+        INSERT OR IGNORE INTO todo_reminders (todo_id, notify_at, notified, sort_order)
+        SELECT
+            id,
+            COALESCE(
+                strftime(
+                    '%Y-%m-%dT%H:%M:%S',
+                    datetime(replace(notify_at, 'T', ' '), '-' || COALESCE(notify_before, 0) || ' minutes')
+                ),
+                notify_at
+            ),
+            COALESCE(notified, 0),
+            0
+        FROM todos
+        WHERE notify_at IS NOT NULL;",
+    )?;
     Ok(())
 }
 
@@ -168,7 +210,7 @@ fn migration_v11(conn: &Connection) -> Result<()> {
             FOREIGN KEY (agent_id) REFERENCES agent_configs(id) ON DELETE SET NULL
         );
         CREATE INDEX IF NOT EXISTS idx_agent_executions_subtask ON agent_executions(subtask_id);
-        CREATE INDEX IF NOT EXISTS idx_agent_executions_task ON agent_executions(task_id);"
+        CREATE INDEX IF NOT EXISTS idx_agent_executions_task ON agent_executions(task_id);",
     )
 }
 
@@ -193,7 +235,7 @@ fn migration_v13(conn: &Connection) -> Result<()> {
          ALTER TABLE subtasks ADD COLUMN scheduled_at TEXT;
          ALTER TABLE subtasks ADD COLUMN last_scheduled_run TEXT;
          ALTER TABLE subtasks ADD COLUMN schedule_error TEXT;
-         CREATE INDEX IF NOT EXISTS idx_subtasks_schedule_status ON subtasks(schedule_status);"
+         CREATE INDEX IF NOT EXISTS idx_subtasks_schedule_status ON subtasks(schedule_status);",
     )
 }
 
@@ -202,7 +244,7 @@ fn migration_v14(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "ALTER TABLE todos ADD COLUMN schedule_strategy TEXT NOT NULL DEFAULT 'manual';
          ALTER TABLE todos ADD COLUMN cron_expression TEXT;
-         ALTER TABLE todos ADD COLUMN schedule_enabled INTEGER NOT NULL DEFAULT 0;"
+         ALTER TABLE todos ADD COLUMN schedule_enabled INTEGER NOT NULL DEFAULT 0;",
     )
 }
 
@@ -220,7 +262,7 @@ fn migration_v15(conn: &Connection) -> Result<()> {
             UNIQUE(subtask_id, depends_on_id)
         );
         CREATE INDEX IF NOT EXISTS idx_task_deps_subtask ON task_dependencies(subtask_id);
-        CREATE INDEX IF NOT EXISTS idx_task_deps_depends ON task_dependencies(depends_on_id);"
+        CREATE INDEX IF NOT EXISTS idx_task_deps_depends ON task_dependencies(depends_on_id);",
     )
 }
 
@@ -238,16 +280,13 @@ fn migration_v16(conn: &Connection) -> Result<()> {
             is_builtin          INTEGER NOT NULL DEFAULT 0,
             created_at          TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
             updated_at          TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-        );"
+        );",
     )
 }
 
 /// 迁移 v17：给 todos 表添加 last_scheduled_run 字段，用于 Cron 定时任务触发时间记录。
 fn migration_v17(conn: &Connection) -> Result<()> {
-    conn.execute(
-        "ALTER TABLE todos ADD COLUMN last_scheduled_run TEXT",
-        [],
-    )?;
+    conn.execute("ALTER TABLE todos ADD COLUMN last_scheduled_run TEXT", [])?;
     Ok(())
 }
 
@@ -280,7 +319,7 @@ fn migration_v19(conn: &Connection) -> Result<()> {
             FOREIGN KEY (todo_id) REFERENCES todos(id) ON DELETE CASCADE,
             FOREIGN KEY (subtask_id) REFERENCES subtasks(id) ON DELETE SET NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_workflow_steps_todo ON workflow_steps(todo_id, step_order);"
+        CREATE INDEX IF NOT EXISTS idx_workflow_steps_todo ON workflow_steps(todo_id, step_order);",
     )?;
 
     let has_wf_enabled: bool = conn
@@ -289,7 +328,7 @@ fn migration_v19(conn: &Connection) -> Result<()> {
     if !has_wf_enabled {
         conn.execute_batch(
             "ALTER TABLE todos ADD COLUMN workflow_enabled INTEGER NOT NULL DEFAULT 0;
-             ALTER TABLE todos ADD COLUMN workflow_current_step INTEGER NOT NULL DEFAULT -1;"
+             ALTER TABLE todos ADD COLUMN workflow_current_step INTEGER NOT NULL DEFAULT -1;",
         )?;
     }
     Ok(())
@@ -322,10 +361,7 @@ fn migration_v9(conn: &Connection) -> Result<()> {
         "ALTER TABLE todos ADD COLUMN agent_id INTEGER REFERENCES agent_configs(id) ON DELETE SET NULL",
         [],
     )?;
-    conn.execute(
-        "ALTER TABLE todos ADD COLUMN agent_project_path TEXT",
-        [],
-    )?;
+    conn.execute("ALTER TABLE todos ADD COLUMN agent_project_path TEXT", [])?;
     Ok(())
 }
 

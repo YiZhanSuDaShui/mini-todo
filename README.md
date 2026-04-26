@@ -78,7 +78,7 @@
 
 ## 安装
 
-前往 [Releases](https://github.com/dreamlonglll/mini-todo/releases) 页面下载最新版本。
+前往 [Releases](https://github.com/YiZhanSuDaShui/mini-todo/releases) 页面下载最新版本。
 
 ### Windows
 - 下载 `.msi` 或 `.exe` 安装包

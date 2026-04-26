@@ -121,6 +121,7 @@ fn parse_npm_cmd_file(cmd_path: &Path) -> Option<(String, String)> {
     let cmd_dir = cmd_path.parent()?;
 
     let mut node_path: Option<String> = None;
+    let mut uses_path_node = false;
     let mut script_path: Option<String> = None;
 
     for line in content.lines() {
@@ -143,6 +144,15 @@ fn parse_npm_cmd_file(cmd_path: &Path) -> Option<(String, String)> {
             }
         }
 
+        if node_path.is_none()
+            && (line.contains("SET \"_prog=node\"")
+                || line.contains("SET _prog=node")
+                || line.contains("set \"_prog=node\"")
+                || line.contains("set _prog=node"))
+        {
+            uses_path_node = true;
+        }
+
         if line.contains("%*") && (line.contains(".js") || line.contains(".mjs")) && script_path.is_none() {
             for part in line.split('"') {
                 if part.ends_with(".js") || part.ends_with(".mjs") {
@@ -163,6 +173,10 @@ fn parse_npm_cmd_file(cmd_path: &Path) -> Option<(String, String)> {
         if node_path.is_some() && script_path.is_some() {
             break;
         }
+    }
+
+    if node_path.is_none() && uses_path_node {
+        node_path = Some("node".to_string());
     }
 
     match (node_path, script_path) {

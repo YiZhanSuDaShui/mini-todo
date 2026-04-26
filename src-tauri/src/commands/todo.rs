@@ -1,8 +1,9 @@
-use base64::{engine::general_purpose, Engine};
 use crate::db::{
+    load_reminder_times, replace_reminder_times, subtask_from_row, todo_from_row,
     CreateSubTaskRequest, CreateTodoRequest, Database, SubTask, Todo, UpdateSubTaskRequest,
-    UpdateTodoRequest, subtask_from_row, todo_from_row, SUBTASK_COLUMNS, TODO_COLUMNS,
+    UpdateTodoRequest, SUBTASK_COLUMNS, TODO_COLUMNS,
 };
+use base64::{engine::general_purpose, Engine};
 use std::path::{Path, PathBuf};
 use tauri::State;
 
@@ -22,6 +23,7 @@ pub fn get_todos(db: State<Database>) -> Result<Vec<Todo>, String> {
 
         // 获取每个待办的子任务
         for todo in &mut todos {
+            todo.reminder_times = load_reminder_times(conn, todo.id)?;
             let subtask_sql = format!(
                 "SELECT {} FROM subtasks WHERE parent_id = ? ORDER BY sort_order ASC",
                 SUBTASK_COLUMNS
@@ -51,27 +53,26 @@ pub fn create_todo(db: State<Database>, data: CreateTodoRequest) -> Result<Todo,
             .unwrap_or(-1);
 
         conn.execute(
-            "INSERT INTO todos (title, description, color, quadrant, notify_at, notify_before, start_time, end_time, sort_order, agent_id, agent_project_path) 
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO todos (title, description, color, quadrant, start_time, end_time, sort_order)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             (
                 &data.title,
                 &data.description,
                 &data.color,
                 data.quadrant,
-                &data.notify_at,
-                data.notify_before.unwrap_or(0),
                 &data.start_time,
                 &data.end_time,
                 max_order + 1,
-                &data.agent_id,
-                &data.agent_project_path,
             ),
         )?;
 
         let id = conn.last_insert_rowid();
+        replace_reminder_times(conn, id, &data.reminder_times)?;
 
         let sql = format!("SELECT {} FROM todos WHERE id = ?", TODO_COLUMNS);
-        conn.query_row(&sql, [id], |row| todo_from_row(row))
+        let mut todo = conn.query_row(&sql, [id], |row| todo_from_row(row))?;
+        todo.reminder_times = load_reminder_times(conn, id)?;
+        Ok(todo)
     })
     .map_err(|e| e.to_string())
 }
@@ -98,20 +99,11 @@ pub fn update_todo(db: State<Database>, id: i64, data: UpdateTodoRequest) -> Res
             updates.push("quadrant = ?");
             params.push(Box::new(quadrant));
         }
-        // 明确清除通知时间
-        if data.clear_notify_at {
-            updates.push("notify_at = NULL");
-            updates.push("notified = 0");
-        } else if let Some(ref notify_at) = data.notify_at {
-            updates.push("notify_at = ?");
-            params.push(Box::new(notify_at.clone()));
-            // 设置新通知时间时，重置已通知状态
-            updates.push("notified = 0");
-        }
-        if let Some(notify_before) = data.notify_before {
-            updates.push("notify_before = ?");
-            params.push(Box::new(notify_before));
-        }
+        let reminder_times_update = if data.clear_reminder_times {
+            Some(Vec::new())
+        } else {
+            data.reminder_times.clone()
+        };
         if let Some(completed) = data.completed {
             updates.push("completed = ?");
             params.push(Box::new(if completed { 1 } else { 0 }));
@@ -134,26 +126,7 @@ pub fn update_todo(db: State<Database>, id: i64, data: UpdateTodoRequest) -> Res
             updates.push("end_time = ?");
             params.push(Box::new(end_time.clone()));
         }
-        // Agent 绑定
-        if data.clear_agent {
-            updates.push("agent_id = NULL");
-            updates.push("agent_project_path = NULL");
-        } else {
-            if let Some(agent_id) = data.agent_id {
-                updates.push("agent_id = ?");
-                params.push(Box::new(agent_id));
-            }
-            if let Some(ref path) = data.agent_project_path {
-                updates.push("agent_project_path = ?");
-                params.push(Box::new(path.clone()));
-            }
-        }
-        if let Some(ref post_action) = data.post_action {
-            updates.push("post_action = ?");
-            params.push(Box::new(post_action.clone()));
-        }
-
-        if updates.is_empty() {
+        if updates.is_empty() && reminder_times_update.is_none() {
             return Err(rusqlite::Error::InvalidParameterName(
                 "No fields to update".to_string(),
             ));
@@ -161,14 +134,22 @@ pub fn update_todo(db: State<Database>, id: i64, data: UpdateTodoRequest) -> Res
 
         updates.push("updated_at = datetime('now', 'localtime')");
 
-        let sql = format!("UPDATE todos SET {} WHERE id = ?", updates.join(", "));
-        params.push(Box::new(id));
+        if !updates.is_empty() {
+            let sql = format!("UPDATE todos SET {} WHERE id = ?", updates.join(", "));
+            params.push(Box::new(id));
 
-        let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-        conn.execute(&sql, params_refs.as_slice())?;
+            let params_refs: Vec<&dyn rusqlite::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
+            conn.execute(&sql, params_refs.as_slice())?;
+        }
+
+        if let Some(reminder_times) = reminder_times_update {
+            replace_reminder_times(conn, id, &reminder_times)?;
+        }
 
         let todo_sql = format!("SELECT {} FROM todos WHERE id = ?", TODO_COLUMNS);
         let mut todo = conn.query_row(&todo_sql, [id], |row| todo_from_row(row))?;
+        todo.reminder_times = load_reminder_times(conn, id)?;
 
         let subtask_sql = format!(
             "SELECT {} FROM subtasks WHERE parent_id = ? ORDER BY sort_order ASC",
@@ -186,6 +167,7 @@ pub fn update_todo(db: State<Database>, id: i64, data: UpdateTodoRequest) -> Res
 #[tauri::command]
 pub fn delete_todo(db: State<Database>, id: i64) -> Result<(), String> {
     db.with_connection(|conn| {
+        conn.execute("DELETE FROM todo_reminders WHERE todo_id = ?", [id])?;
         conn.execute("DELETE FROM todos WHERE id = ?", [id])?;
         Ok(())
     })

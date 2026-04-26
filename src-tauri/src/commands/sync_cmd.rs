@@ -1,3 +1,4 @@
+use super::data::{export_data_internal, import_data_raw};
 use crate::db::Database;
 use crate::services::webdav::WebDavClient;
 use flate2::read::GzDecoder;
@@ -7,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use std::io::{Read as _, Write as _};
 use std::path::PathBuf;
 use tauri::State;
-use super::data::{export_data_internal, import_data_raw};
 
 const REMOTE_DIR: &str = "/mini-todo";
 const SYNC_DATA_FILE: &str = "/mini-todo/sync-data.json.gz";
@@ -21,8 +21,14 @@ pub struct SyncSettings {
     pub webdav_password: String,
     pub auto_sync: bool,
     pub sync_interval: i32,
+    #[serde(default = "default_sync_mode")]
+    pub sync_mode: String,
     pub last_sync_at: Option<String>,
     pub device_id: String,
+}
+
+fn default_sync_mode() -> String {
+    "archive".to_string()
 }
 
 impl Default for SyncSettings {
@@ -33,6 +39,7 @@ impl Default for SyncSettings {
             webdav_password: String::new(),
             auto_sync: false,
             sync_interval: 15,
+            sync_mode: default_sync_mode(),
             last_sync_at: None,
             device_id: generate_device_id(),
         }
@@ -56,11 +63,9 @@ fn get_images_dir() -> PathBuf {
 }
 
 fn get_setting(conn: &rusqlite::Connection, key: &str) -> Option<String> {
-    conn.query_row(
-        "SELECT value FROM settings WHERE key = ?1",
-        [key],
-        |row| row.get(0),
-    )
+    conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
+        row.get(0)
+    })
     .ok()
 }
 
@@ -83,8 +88,17 @@ pub fn save_sync_settings(db: State<Database>, settings: SyncSettings) -> Result
         set_setting(conn, "webdav_url", &settings.webdav_url)?;
         set_setting(conn, "webdav_username", &settings.webdav_username)?;
         set_setting(conn, "webdav_password", &settings.webdav_password)?;
-        set_setting(conn, "webdav_auto_sync", if settings.auto_sync { "true" } else { "false" })?;
-        set_setting(conn, "webdav_sync_interval", &settings.sync_interval.to_string())?;
+        set_setting(
+            conn,
+            "webdav_auto_sync",
+            if settings.auto_sync { "true" } else { "false" },
+        )?;
+        set_setting(
+            conn,
+            "webdav_sync_interval",
+            &settings.sync_interval.to_string(),
+        )?;
+        set_setting(conn, "webdav_sync_mode", &settings.sync_mode)?;
         if let Some(ref last) = settings.last_sync_at {
             set_setting(conn, "webdav_last_sync_at", last)?;
         }
@@ -95,7 +109,11 @@ pub fn save_sync_settings(db: State<Database>, settings: SyncSettings) -> Result
 }
 
 #[tauri::command]
-pub fn webdav_test_connection(url: String, username: String, password: String) -> Result<bool, String> {
+pub fn webdav_test_connection(
+    url: String,
+    username: String,
+    password: String,
+) -> Result<bool, String> {
     let client = WebDavClient::new(&url, &username, &password);
     client.test_connection()
 }
@@ -109,16 +127,6 @@ pub struct SyncData {
     pub todos: Vec<serde_json::Value>,
     pub settings: serde_json::Value,
     pub images: Vec<String>,
-    #[serde(default)]
-    pub agent_configs: Vec<serde_json::Value>,
-    #[serde(default)]
-    pub workflow_steps: Vec<serde_json::Value>,
-    #[serde(default)]
-    pub task_dependencies: Vec<serde_json::Value>,
-    #[serde(default)]
-    pub prompt_templates: Vec<serde_json::Value>,
-    #[serde(default)]
-    pub agent_executions: Vec<serde_json::Value>,
 }
 
 #[tauri::command]
@@ -157,9 +165,15 @@ pub fn webdav_upload_sync(db: State<Database>) -> Result<String, String> {
     let export_data: serde_json::Value =
         serde_json::from_str(&export_json).map_err(|e| e.to_string())?;
 
-    let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string();
+    let now = chrono::Local::now()
+        .format("%Y-%m-%dT%H:%M:%S%:z")
+        .to_string();
     let sync_data = SyncData {
-        version: export_data.get("version").and_then(|v| v.as_str()).unwrap_or("3.0").to_string(),
+        version: export_data
+            .get("version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("3.0")
+            .to_string(),
         device_id: sync_settings.device_id.clone(),
         updated_at: now.clone(),
         todos: export_data
@@ -172,31 +186,6 @@ pub fn webdav_upload_sync(db: State<Database>) -> Result<String, String> {
             .cloned()
             .unwrap_or(serde_json::Value::Null),
         images: image_files.clone(),
-        agent_configs: export_data
-            .get("agentConfigs")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default(),
-        workflow_steps: export_data
-            .get("workflowSteps")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default(),
-        task_dependencies: export_data
-            .get("taskDependencies")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default(),
-        prompt_templates: export_data
-            .get("promptTemplates")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default(),
-        agent_executions: export_data
-            .get("agentExecutions")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default(),
     };
 
     let sync_json = serde_json::to_string(&sync_data).map_err(|e| e.to_string())?;
@@ -291,11 +280,6 @@ pub fn webdav_apply_remote(db: State<Database>, sync_data_json: String) -> Resul
         "exportedAt": sync_data.updated_at,
         "todos": sync_data.todos,
         "settings": sync_data.settings,
-        "agentConfigs": sync_data.agent_configs,
-        "workflowSteps": sync_data.workflow_steps,
-        "taskDependencies": sync_data.task_dependencies,
-        "promptTemplates": sync_data.prompt_templates,
-        "agentExecutions": sync_data.agent_executions,
     });
 
     let import_str = serde_json::to_string(&import_json).map_err(|e| e.to_string())?;
@@ -321,7 +305,9 @@ pub fn webdav_apply_remote(db: State<Database>, sync_data_json: String) -> Resul
     }
 
     // Update last sync time
-    let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string();
+    let now = chrono::Local::now()
+        .format("%Y-%m-%dT%H:%M:%S%:z")
+        .to_string();
     db.with_connection(|conn| {
         set_setting(conn, "webdav_last_sync_at", &now)?;
         Ok(())
@@ -358,13 +344,9 @@ pub fn webdav_auto_sync(db: State<Database>) -> Result<String, String> {
                         "exportedAt": remote_data.updated_at,
                         "todos": remote_data.todos,
                         "settings": remote_data.settings,
-                        "agentConfigs": remote_data.agent_configs,
-                        "workflowSteps": remote_data.workflow_steps,
-                        "taskDependencies": remote_data.task_dependencies,
-                        "promptTemplates": remote_data.prompt_templates,
-                        "agentExecutions": remote_data.agent_executions,
                     });
-                    let import_str = serde_json::to_string(&import_json).map_err(|e| e.to_string())?;
+                    let import_str =
+                        serde_json::to_string(&import_json).map_err(|e| e.to_string())?;
                     import_data_raw(&*db, &import_str)?;
 
                     let images_dir = get_images_dir();
@@ -377,11 +359,14 @@ pub fn webdav_auto_sync(db: State<Database>) -> Result<String, String> {
                         }
                     }
 
-                    let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string();
+                    let now = chrono::Local::now()
+                        .format("%Y-%m-%dT%H:%M:%S%:z")
+                        .to_string();
                     db.with_connection(|conn| {
                         set_setting(conn, "webdav_last_sync_at", &now)?;
                         Ok(())
-                    }).map_err(|e| e.to_string())?;
+                    })
+                    .map_err(|e| e.to_string())?;
                     return Ok(now);
                 }
 
@@ -415,9 +400,11 @@ fn read_sync_settings(db: &Database) -> Result<SyncSettings, String> {
             sync_interval: get_setting(conn, "webdav_sync_interval")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(15),
+            sync_mode: get_setting(conn, "webdav_sync_mode")
+                .filter(|v| v == "archive" || v == "incremental")
+                .unwrap_or_else(default_sync_mode),
             last_sync_at: get_setting(conn, "webdav_last_sync_at"),
-            device_id: get_setting(conn, "webdav_device_id")
-                .unwrap_or_else(generate_device_id),
+            device_id: get_setting(conn, "webdav_device_id").unwrap_or_else(generate_device_id),
         };
         Ok(settings)
     })
@@ -446,21 +433,7 @@ fn check_local_changes(db: &State<Database>, settings: &SyncSettings) -> Result<
                 |row| row.get(0),
             )
             .unwrap_or(0);
-        let agent_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM agent_configs WHERE updated_at > ?1",
-                [last_sync],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        let template_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM prompt_templates WHERE updated_at > ?1 AND is_builtin = 0",
-                [last_sync],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        Ok(todo_count > 0 || subtask_count > 0 || agent_count > 0 || template_count > 0)
+        Ok(todo_count > 0 || subtask_count > 0)
     })
     .map_err(|e| e.to_string())
 }
@@ -474,13 +447,17 @@ fn is_remote_newer(settings: &SyncSettings, remote_updated_at: &str) -> bool {
 
 fn gzip_compress(data: &[u8]) -> Result<Vec<u8>, String> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(data).map_err(|e| format!("压缩失败: {}", e))?;
+    encoder
+        .write_all(data)
+        .map_err(|e| format!("压缩失败: {}", e))?;
     encoder.finish().map_err(|e| format!("压缩完成失败: {}", e))
 }
 
 fn gzip_decompress(data: &[u8]) -> Result<String, String> {
     let mut decoder = GzDecoder::new(data);
     let mut result = String::new();
-    decoder.read_to_string(&mut result).map_err(|e| format!("解压失败: {}", e))?;
+    decoder
+        .read_to_string(&mut result)
+        .map_err(|e| format!("解压失败: {}", e))?;
     Ok(result)
 }

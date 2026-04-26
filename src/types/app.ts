@@ -74,6 +74,7 @@ export interface SyncSettings {
   webdavPassword: string
   autoSync: boolean
   syncInterval: number
+  syncMode: 'archive' | 'incremental'
   lastSyncAt: string | null
   deviceId: string
 }
@@ -95,4 +96,21 @@ export interface SyncDownloadResult {
   localUpdatedAt: string | null
   remoteUpdatedAt: string | null
   hasConflict: boolean
+}
+
+// 本地 AI 设置：仅保存在本机，不参与导出和云同步
+export interface AiSettings {
+  baseUrl: string
+  apiKey: string
+  model: string
+  thinkingEnabled: boolean
+  reasoningEffort: 'high' | 'max'
+}
+
+// AI 生成的待办时间规划
+export interface AiPlanResult {
+  startTime: string | null
+  endTime: string | null
+  reminderTimes: string[]
+  reason?: string | null
 }

@@ -50,8 +50,10 @@ fn read_app_settings(conn: &rusqlite::Connection) -> AppSettings {
     let text_theme = get_setting_string(conn, "text_theme", "dark");
     let auto_hide_enabled = get_setting_bool(conn, "auto_hide_enabled", true);
     let show_calendar = get_setting_bool(conn, "show_calendar", false);
-    let view_mode = get_setting_string(conn, "view_mode", "list");
+    let view_mode = get_setting_string(conn, "view_mode", "quadrant");
     let notification_type = get_setting_string(conn, "notification_type", "system");
+    let app_notification_position =
+        get_setting_string(conn, "app_notification_position", "bottom_right");
 
     AppSettings {
         is_fixed,
@@ -62,6 +64,7 @@ fn read_app_settings(conn: &rusqlite::Connection) -> AppSettings {
         show_calendar,
         view_mode,
         notification_type,
+        app_notification_position,
     }
 }
 
@@ -103,6 +106,10 @@ fn write_app_settings(conn: &rusqlite::Connection, settings: &AppSettings) -> ru
     conn.execute(
         "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('notification_type', ?1, datetime('now', 'localtime'))",
         [&settings.notification_type],
+    )?;
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('app_notification_position', ?1, datetime('now', 'localtime'))",
+        [&settings.app_notification_position],
     )?;
     Ok(())
 }

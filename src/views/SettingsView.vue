@@ -9,7 +9,7 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAppStore, APP_VERSION } from '@/stores'
-import type { AiSettings, ScreenConfig, SyncSettings, SyncDownloadResult } from '@/types'
+import type { AiSettings, AppNotificationPosition, ScreenConfig, SyncSettings, SyncDownloadResult } from '@/types'
 
 const appWindow = getCurrentWindow()
 const appStore = useAppStore()
@@ -23,6 +23,14 @@ const autoStartLoading = ref(false)
 // 通知类型设置
 const notificationType = ref<'system' | 'app'>('system')
 const notificationTypeLoading = ref(false)
+const appNotificationPosition = ref<AppNotificationPosition>('bottom_right')
+const appNotificationPositionLoading = ref(false)
+const appNotificationPositionOptions: Array<{ label: string; value: AppNotificationPosition }> = [
+  { label: '右下', value: 'bottom_right' },
+  { label: '右上', value: 'top_right' },
+  { label: '左下', value: 'bottom_left' },
+  { label: '左上', value: 'top_left' },
+]
 
 // 屏幕配置相关
 const screenConfigs = computed(() => appStore.screenConfigs)
@@ -30,8 +38,7 @@ const currentConfigId = computed(() => appStore.currentScreenConfigId)
 
 // 日历显示
 const showCalendar = computed(() => appStore.showCalendar)
-// 贴边自动隐藏
-const autoHideEnabled = computed(() => appStore.autoHideEnabled)
+const floatingBubbleEnabled = computed(() => appStore.isFixed)
 
 // 是否有更新
 const hasUpdate = computed(() => appStore.hasUpdate)
@@ -39,6 +46,10 @@ const latestVersion = computed(() => appStore.latestVersion)
 
 // 初始化时获取开机自启状态和屏幕配置
 onMounted(async () => {
+  await appStore.loadAppVersion()
+  await appStore.listenFloatingBubbleStateChanges()
+  await appStore.loadFloatingBubbleEnabled()
+
   try {
     autoStart.value = await isEnabled()
   } catch (e) {
@@ -52,14 +63,21 @@ onMounted(async () => {
   } catch (e) {
     console.error('Failed to get notification type:', e)
   }
+
+  try {
+    const position = await invoke<AppNotificationPosition>('get_app_notification_position')
+    appNotificationPosition.value = appNotificationPositionOptions.some(opt => opt.value === position)
+      ? position
+      : 'bottom_right'
+  } catch (e) {
+    console.error('Failed to get app notification position:', e)
+  }
   
   // 加载屏幕配置列表
   await appStore.loadScreenConfigs()
   
   // 加载日历显示状态
   await appStore.loadShowCalendar()
-  // 加载贴边自动隐藏状态
-  await appStore.loadAutoHideEnabled()
   
   // 加载 WebDAV 同步设置
   await loadSyncSettings()
@@ -269,6 +287,35 @@ function handleSyncModeChange(mode: 'archive' | 'incremental') {
   if (syncSettings.syncMode === mode) return
   syncSettings.syncMode = mode
   saveSyncSettings()
+}
+
+async function handleFloatingBubbleChange(value: boolean) {
+  try {
+    await appStore.setFloatingBubbleEnabled(value)
+    ElMessage.success(value ? '已开启悬浮球入口' : '已关闭悬浮球入口')
+  } catch (e) {
+    ElMessage.error('设置悬浮球入口失败: ' + String(e))
+  }
+}
+
+// 切换软件通知位置
+async function handleAppNotificationPositionChange(value: string | number | boolean) {
+  const nextPosition = typeof value === 'string' && appNotificationPositionOptions.some(opt => opt.value === value)
+    ? value as AppNotificationPosition
+    : 'bottom_right'
+  const oldValue = appNotificationPosition.value
+  try {
+    appNotificationPositionLoading.value = true
+    appNotificationPosition.value = nextPosition
+    await invoke('set_app_notification_position', { appNotificationPosition: nextPosition })
+    ElMessage.success('软件通知位置已保存')
+  } catch (e) {
+    console.error('Failed to set app notification position:', e)
+    ElMessage.error('设置软件通知位置失败')
+    appNotificationPosition.value = oldValue
+  } finally {
+    appNotificationPositionLoading.value = false
+  }
 }
 
 async function loadSyncSettings() {
@@ -562,13 +609,13 @@ async function handleCheckUpdate() {
             <div class="row-left">
               <el-icon class="row-icon"><Monitor /></el-icon>
               <div class="row-content">
-                <span class="settings-label">贴边自动隐藏</span>
-                <span class="settings-desc">固定模式下，贴边后自动隐藏并在边缘唤起</span>
+                <span class="settings-label">悬浮球入口</span>
+                <span class="settings-desc">开启右侧圆形入口，点击可显示或隐藏主窗口，不影响新建待办</span>
               </div>
             </div>
             <el-switch
-              :model-value="autoHideEnabled"
-              @change="(val: boolean) => appStore.setAutoHideEnabled(val)"
+              :model-value="floatingBubbleEnabled"
+              @change="(val: boolean) => handleFloatingBubbleChange(val)"
             />
           </div>
           
@@ -602,6 +649,30 @@ async function handleCheckUpdate() {
             >
               <el-radio-button value="system">系统通知</el-radio-button>
               <el-radio-button value="app">软件通知</el-radio-button>
+            </el-radio-group>
+          </div>
+
+          <div class="settings-row notification-position-row">
+            <div class="row-left">
+              <el-icon class="row-icon"><Bell /></el-icon>
+              <div class="row-content">
+                <span class="settings-label">软件通知位置</span>
+                <span class="settings-desc">仅在通知方式为软件通知时生效</span>
+              </div>
+            </div>
+            <el-radio-group
+              :model-value="appNotificationPosition"
+              :disabled="appNotificationPositionLoading"
+              size="small"
+              @change="handleAppNotificationPositionChange"
+            >
+              <el-radio-button
+                v-for="opt in appNotificationPositionOptions"
+                :key="opt.value"
+                :value="opt.value"
+              >
+                {{ opt.label }}
+              </el-radio-button>
             </el-radio-group>
           </div>
         </div>
@@ -952,7 +1023,7 @@ async function handleCheckUpdate() {
                   {{ formatConfigInfo(config.configId) }}
                 </div>
                 <div class="config-meta">
-                  {{ config.isFixed ? '固定模式' : '普通模式' }} | 
+                  {{ config.isFixed ? '悬浮球开启' : '悬浮球关闭' }} |
                   位置: ({{ config.windowX }}, {{ config.windowY }})
                 </div>
               </div>
@@ -1125,8 +1196,9 @@ async function handleCheckUpdate() {
   margin-top: 2px;
 }
 
-/* 通知类型设置行 */
-.notification-type-row {
+/* 通知设置行 */
+.notification-type-row,
+.notification-position-row {
   flex-wrap: wrap;
   gap: 8px;
   

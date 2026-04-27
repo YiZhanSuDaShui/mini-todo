@@ -3,29 +3,29 @@ use crate::db::{
 };
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
-use tauri::{Manager, State, WebviewWindow, Window};
+use std::sync::OnceLock;
+use tauri::{AppHandle, Manager, State, WebviewWindow, Window};
 
 #[cfg(target_os = "windows")]
-use windows::Win32::Foundation::{HWND, POINT};
+use windows::Win32::Foundation::HWND;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetWindowLongW, SetWindowLongW, GWL_EXSTYLE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    GetAncestor, IsWindowVisible, SetWindowPos, ShowWindow, GA_ROOT, HWND_TOPMOST, SWP_NOACTIVATE,
+    SWP_NOMOVE, SW_HIDE, SW_SHOWNORMAL,
 };
 
-/// 全局固定模式状态
+/// 全局悬浮球入口状态（沿用旧命名以兼容历史调用）
 pub static IS_FIXED_MODE: AtomicBool = AtomicBool::new(false);
 
-/// 托盘"固定模式"勾选菜单项引用，用于跨模块同步状态
+/// 托盘"悬浮球入口"勾选菜单项引用，用于跨模块同步状态
 static TRAY_TOGGLE_FIXED: OnceLock<tauri::menu::CheckMenuItem<tauri::Wry>> = OnceLock::new();
 
-/// 检查当前是否处于固定模式
+/// 检查当前是否开启悬浮球入口
 pub fn is_fixed_mode() -> bool {
     IS_FIXED_MODE.load(Ordering::SeqCst)
 }
 
-/// 保存托盘"固定模式"勾选菜单项引用（在 setup 阶段调用一次）
+/// 保存托盘"悬浮球入口"勾选菜单项引用（在 setup 阶段调用一次）
 pub fn set_tray_toggle_fixed_item(item: tauri::menu::CheckMenuItem<tauri::Wry>) {
     let _ = TRAY_TOGGLE_FIXED.set(item);
 }
@@ -35,6 +35,70 @@ fn sync_tray_fixed_checked(fixed: bool) {
     if let Some(item) = TRAY_TOGGLE_FIXED.get() {
         let _ = item.set_checked(fixed);
     }
+}
+
+#[cfg(target_os = "windows")]
+fn hwnd_from_window<T: raw_window_handle::HasWindowHandle>(window: &T) -> Result<HWND, String> {
+    let handle = window.window_handle().map_err(|e| e.to_string())?;
+    if let raw_window_handle::RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
+        let hwnd = HWND(win32_handle.hwnd.get() as *mut _);
+        let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
+        if root.0.is_null() {
+            Ok(hwnd)
+        } else {
+            Ok(root)
+        }
+    } else {
+        Err("当前窗口不是 Win32 窗口".to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn hide_window_win32<T: raw_window_handle::HasWindowHandle>(window: &T) -> Result<(), String> {
+    let hwnd = hwnd_from_window(window)?;
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_HIDE);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn show_window_win32<T: raw_window_handle::HasWindowHandle>(window: &T) -> Result<(), String> {
+    let hwnd = hwnd_from_window(window)?;
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_SHOWNORMAL);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn is_window_visible_win32<T: raw_window_handle::HasWindowHandle>(
+    window: &T,
+) -> Result<bool, String> {
+    let hwnd = hwnd_from_window(window)?;
+    Ok(unsafe { IsWindowVisible(hwnd).as_bool() })
+}
+
+#[cfg(target_os = "windows")]
+fn set_window_size_win32<T: raw_window_handle::HasWindowHandle>(
+    window: &T,
+    width: i32,
+    height: i32,
+) -> Result<(), String> {
+    let hwnd = hwnd_from_window(window)?;
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            width,
+            height,
+            SWP_NOMOVE | SWP_NOACTIVATE,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 fn get_auto_hide_enabled_value(db: &State<Database>) -> bool {
@@ -54,426 +118,11 @@ fn get_auto_hide_enabled_value(db: &State<Database>) -> bool {
     .unwrap_or(true)
 }
 
-const EDGE_SNAP_THRESHOLD_PX: i32 = 10;
-const EDGE_HIDE_DELAY: Duration = Duration::from_millis(420);
-const HIDDEN_VISIBLE_STRIP_PX: i32 = 4;
-const WAKE_HOTZONE_WIDTH_PX: i32 = 2;
-const WAKE_RANGE_PADDING_PX: i32 = 40;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DockEdge {
-    Left,
-    Right,
-    Top,
-    Bottom,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct MonitorBounds {
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-}
-
-impl MonitorBounds {
-    fn right(self) -> i32 {
-        self.x + self.width
-    }
-
-    fn bottom(self) -> i32 {
-        self.y + self.height
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct WindowRect {
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-}
-
-impl WindowRect {
-    fn right(self) -> i32 {
-        self.x + self.width
-    }
-
-    fn bottom(self) -> i32 {
-        self.y + self.height
-    }
-}
-
-#[derive(Debug)]
-struct AutoHideState {
-    enabled: bool,
-    hidden: bool,
-    cursor_inside_window: bool,
-    docked_edge: Option<DockEdge>,
-    monitor_bounds: Option<MonitorBounds>,
-    anchor_position: Option<WindowPosition>,
-    anchor_size: Option<WindowSize>,
-    edge_stick_started_at: Option<Instant>,
-}
-
-impl Default for AutoHideState {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            hidden: false,
-            cursor_inside_window: true,
-            docked_edge: None,
-            monitor_bounds: None,
-            anchor_position: None,
-            anchor_size: None,
-            edge_stick_started_at: None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowPersistState {
     pub position: WindowPosition,
     pub size: WindowSize,
-}
-
-#[derive(Debug, Clone)]
-enum AutoHideTransition {
-    None,
-    Hide {
-        anchor: WindowPosition,
-        hidden: WindowPosition,
-        size: WindowSize,
-        edge: DockEdge,
-        monitor: MonitorBounds,
-    },
-    Restore {
-        anchor: WindowPosition,
-    },
-}
-
-static AUTO_HIDE_STATE: OnceLock<Mutex<AutoHideState>> = OnceLock::new();
-
-fn with_auto_hide_state<R>(f: impl FnOnce(&mut AutoHideState) -> R) -> R {
-    let mutex = AUTO_HIDE_STATE.get_or_init(|| Mutex::new(AutoHideState::default()));
-    let mut state = mutex.lock().unwrap_or_else(|e| e.into_inner());
-    f(&mut state)
-}
-
-fn clear_auto_hide_runtime_state() {
-    with_auto_hide_state(|state| {
-        state.hidden = false;
-        state.cursor_inside_window = true;
-        state.docked_edge = None;
-        state.monitor_bounds = None;
-        state.anchor_position = None;
-        state.anchor_size = None;
-        state.edge_stick_started_at = None;
-    });
-}
-
-fn clamp_i32(value: i32, min: i32, max: i32) -> i32 {
-    if max < min {
-        return min;
-    }
-    value.max(min).min(max)
-}
-
-fn point_in_rect(x: i32, y: i32, rect: WindowRect) -> bool {
-    x >= rect.x && x <= rect.right() && y >= rect.y && y <= rect.bottom()
-}
-
-fn detect_docked_edge(rect: WindowRect, monitor: MonitorBounds) -> Option<DockEdge> {
-    let left_gap = (rect.x - monitor.x).abs();
-    let right_gap = (monitor.right() - rect.right()).abs();
-    let top_gap = (rect.y - monitor.y).abs();
-    let bottom_gap = (monitor.bottom() - rect.bottom()).abs();
-
-    let mut candidates = Vec::with_capacity(4);
-    if left_gap <= EDGE_SNAP_THRESHOLD_PX {
-        candidates.push((DockEdge::Left, left_gap));
-    }
-    if right_gap <= EDGE_SNAP_THRESHOLD_PX {
-        candidates.push((DockEdge::Right, right_gap));
-    }
-    if top_gap <= EDGE_SNAP_THRESHOLD_PX {
-        candidates.push((DockEdge::Top, top_gap));
-    }
-    if bottom_gap <= EDGE_SNAP_THRESHOLD_PX {
-        candidates.push((DockEdge::Bottom, bottom_gap));
-    }
-
-    candidates.sort_by_key(|(_, gap)| *gap);
-    candidates.first().map(|(edge, _)| *edge)
-}
-
-fn calc_anchor_and_hidden_position(
-    rect: WindowRect,
-    monitor: MonitorBounds,
-    edge: DockEdge,
-) -> (WindowPosition, WindowPosition, WindowSize) {
-    let max_x = monitor.right() - rect.width;
-    let max_y = monitor.bottom() - rect.height;
-    let clamped_x = clamp_i32(rect.x, monitor.x, max_x);
-    let clamped_y = clamp_i32(rect.y, monitor.y, max_y);
-
-    let (anchor_x, anchor_y, hidden_x, hidden_y) = match edge {
-        DockEdge::Left => (
-            monitor.x,
-            clamped_y,
-            monitor.x - rect.width + HIDDEN_VISIBLE_STRIP_PX,
-            clamped_y,
-        ),
-        DockEdge::Right => (
-            max_x,
-            clamped_y,
-            monitor.right() - HIDDEN_VISIBLE_STRIP_PX,
-            clamped_y,
-        ),
-        DockEdge::Top => (
-            clamped_x,
-            monitor.y,
-            clamped_x,
-            monitor.y - rect.height + HIDDEN_VISIBLE_STRIP_PX,
-        ),
-        DockEdge::Bottom => (
-            clamped_x,
-            max_y,
-            clamped_x,
-            monitor.bottom() - HIDDEN_VISIBLE_STRIP_PX,
-        ),
-    };
-
-    (
-        WindowPosition {
-            x: anchor_x,
-            y: anchor_y,
-        },
-        WindowPosition {
-            x: hidden_x,
-            y: hidden_y,
-        },
-        WindowSize {
-            width: rect.width as u32,
-            height: rect.height as u32,
-        },
-    )
-}
-
-#[cfg(target_os = "windows")]
-fn get_cursor_position() -> Option<(i32, i32)> {
-    unsafe {
-        let mut point = POINT::default();
-        if GetCursorPos(&mut point).is_ok() {
-            Some((point.x, point.y))
-        } else {
-            None
-        }
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn get_cursor_position() -> Option<(i32, i32)> {
-    None
-}
-
-fn get_window_rect(window: &WebviewWindow) -> Option<WindowRect> {
-    let pos = window.outer_position().ok()?;
-    let size = window.outer_size().ok()?;
-    Some(WindowRect {
-        x: pos.x,
-        y: pos.y,
-        width: size.width as i32,
-        height: size.height as i32,
-    })
-}
-
-fn get_monitor_bounds(window: &WebviewWindow) -> Option<MonitorBounds> {
-    let monitor = window
-        .current_monitor()
-        .ok()
-        .flatten()
-        .or_else(|| window.primary_monitor().ok().flatten())?;
-
-    Some(MonitorBounds {
-        x: monitor.position().x,
-        y: monitor.position().y,
-        width: monitor.size().width as i32,
-        height: monitor.size().height as i32,
-    })
-}
-
-fn should_wake_hidden_window(cursor_x: i32, cursor_y: i32, state: &AutoHideState) -> bool {
-    let (Some(edge), Some(monitor), Some(anchor), Some(size)) = (
-        state.docked_edge,
-        state.monitor_bounds,
-        state.anchor_position.as_ref(),
-        state.anchor_size.as_ref(),
-    ) else {
-        return false;
-    };
-
-    let vertical_min = anchor.y - WAKE_RANGE_PADDING_PX;
-    let vertical_max = anchor.y + size.height as i32 + WAKE_RANGE_PADDING_PX;
-    let horizontal_min = anchor.x - WAKE_RANGE_PADDING_PX;
-    let horizontal_max = anchor.x + size.width as i32 + WAKE_RANGE_PADDING_PX;
-
-    match edge {
-        DockEdge::Left => {
-            cursor_x >= monitor.x
-                && cursor_x <= monitor.x + WAKE_HOTZONE_WIDTH_PX
-                && cursor_y >= vertical_min
-                && cursor_y <= vertical_max
-        }
-        DockEdge::Right => {
-            cursor_x <= monitor.right()
-                && cursor_x >= monitor.right() - WAKE_HOTZONE_WIDTH_PX
-                && cursor_y >= vertical_min
-                && cursor_y <= vertical_max
-        }
-        DockEdge::Top => {
-            cursor_y >= monitor.y
-                && cursor_y <= monitor.y + WAKE_HOTZONE_WIDTH_PX
-                && cursor_x >= horizontal_min
-                && cursor_x <= horizontal_max
-        }
-        DockEdge::Bottom => {
-            cursor_y <= monitor.bottom()
-                && cursor_y >= monitor.bottom() - WAKE_HOTZONE_WIDTH_PX
-                && cursor_x >= horizontal_min
-                && cursor_x <= horizontal_max
-        }
-    }
-}
-
-fn evaluate_auto_hide_transition(
-    state: &mut AutoHideState,
-    rect: WindowRect,
-    monitor: MonitorBounds,
-    cursor: Option<(i32, i32)>,
-    now: Instant,
-) -> AutoHideTransition {
-    if !state.enabled {
-        return AutoHideTransition::None;
-    }
-
-    if state.hidden {
-        let should_restore = if let Some((cursor_x, cursor_y)) = cursor {
-            should_wake_hidden_window(cursor_x, cursor_y, state)
-        } else {
-            state.cursor_inside_window
-        };
-
-        if should_restore {
-            if let Some(anchor) = state.anchor_position.clone() {
-                state.hidden = false;
-                state.edge_stick_started_at = None;
-                return AutoHideTransition::Restore { anchor };
-            }
-        }
-        return AutoHideTransition::None;
-    }
-
-    let docked_edge = detect_docked_edge(rect, monitor);
-    if docked_edge.is_none() {
-        state.docked_edge = None;
-        state.edge_stick_started_at = None;
-        return AutoHideTransition::None;
-    }
-
-    let edge = docked_edge.unwrap();
-    if state.docked_edge != Some(edge) {
-        state.docked_edge = Some(edge);
-        state.edge_stick_started_at = Some(now);
-        return AutoHideTransition::None;
-    }
-
-    let Some(started_at) = state.edge_stick_started_at else {
-        state.edge_stick_started_at = Some(now);
-        return AutoHideTransition::None;
-    };
-
-    let cursor_inside = if let Some((cursor_x, cursor_y)) = cursor {
-        point_in_rect(cursor_x, cursor_y, rect)
-    } else {
-        state.cursor_inside_window
-    };
-
-    if cursor_inside {
-        state.edge_stick_started_at = Some(now);
-        return AutoHideTransition::None;
-    }
-
-    if now.duration_since(started_at) < EDGE_HIDE_DELAY {
-        return AutoHideTransition::None;
-    }
-
-    let (anchor, hidden, size) = calc_anchor_and_hidden_position(rect, monitor, edge);
-    state.hidden = true;
-    state.monitor_bounds = Some(monitor);
-    state.anchor_position = Some(anchor.clone());
-    state.anchor_size = Some(size.clone());
-    state.edge_stick_started_at = None;
-
-    AutoHideTransition::Hide {
-        anchor,
-        hidden,
-        size,
-        edge,
-        monitor,
-    }
-}
-
-/// 固定模式轮询：处理贴边自动隐藏与边缘唤起
-pub fn tick_auto_hide(window: &WebviewWindow) {
-    let cursor = get_cursor_position();
-    let Some(rect) = get_window_rect(window) else {
-        return;
-    };
-    let Some(monitor) = get_monitor_bounds(window) else {
-        return;
-    };
-
-    let transition = with_auto_hide_state(|state| {
-        evaluate_auto_hide_transition(state, rect, monitor, cursor, Instant::now())
-    });
-
-    match transition {
-        AutoHideTransition::None => {}
-        AutoHideTransition::Hide {
-            hidden,
-            anchor,
-            size,
-            edge,
-            monitor,
-        } => {
-            let result = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                x: hidden.x,
-                y: hidden.y,
-            }));
-            if result.is_err() {
-                with_auto_hide_state(|state| {
-                    state.hidden = false;
-                    state.anchor_position = Some(anchor);
-                    state.anchor_size = Some(size);
-                    state.docked_edge = Some(edge);
-                    state.monitor_bounds = Some(monitor);
-                });
-            }
-        }
-        AutoHideTransition::Restore { anchor } => {
-            let result = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                x: anchor.x,
-                y: anchor.y,
-            }));
-            if result.is_err() {
-                with_auto_hide_state(|state| {
-                    state.hidden = true;
-                });
-            }
-        }
-    }
 }
 
 #[tauri::command]
@@ -548,7 +197,7 @@ pub fn get_settings(db: State<Database>) -> Result<AppSettings, String> {
                 [],
                 |row| row.get(0),
             )
-            .unwrap_or_else(|_| "list".to_string());
+            .unwrap_or_else(|_| "quadrant".to_string());
 
         let notification_type: String = conn
             .query_row(
@@ -557,6 +206,14 @@ pub fn get_settings(db: State<Database>) -> Result<AppSettings, String> {
                 |row| row.get(0),
             )
             .unwrap_or_else(|_| "system".to_string());
+
+        let app_notification_position: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'app_notification_position'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| "bottom_right".to_string());
 
         Ok(AppSettings {
             is_fixed,
@@ -567,6 +224,7 @@ pub fn get_settings(db: State<Database>) -> Result<AppSettings, String> {
             show_calendar,
             view_mode,
             notification_type,
+            app_notification_position,
         })
     })
     .map_err(|e| e.to_string())
@@ -599,7 +257,7 @@ pub fn save_settings(db: State<Database>, settings: AppSettings) -> Result<(), S
             )?;
         }
 
-        // 保存贴边自动隐藏设置
+        // 保留旧版本字段，避免升级后读取历史配置失败
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('auto_hide_enabled', ?, datetime('now', 'localtime'))",
             [if settings.auto_hide_enabled { "true" } else { "false" }],
@@ -618,75 +276,153 @@ pub fn save_settings(db: State<Database>, settings: AppSettings) -> Result<(), S
 
 #[tauri::command]
 pub fn set_window_fixed_mode(
-    window: Window,
-    db: State<Database>,
+    _window: Window,
+    _db: State<Database>,
     fixed: bool,
 ) -> Result<(), String> {
-    // 更新全局固定模式状态
+    // 旧命令现在只同步悬浮球入口状态，不再修改主窗口样式或锁定窗口。
     IS_FIXED_MODE.store(fixed, Ordering::SeqCst);
-    let auto_hide_enabled = get_auto_hide_enabled_value(&db);
-
-    let restore_position = with_auto_hide_state(|state| {
-        if fixed {
-            state.enabled = auto_hide_enabled;
-            state.hidden = false;
-            state.docked_edge = None;
-            state.edge_stick_started_at = None;
-            None
-        } else {
-            let restore = if state.hidden {
-                state.anchor_position.clone()
-            } else {
-                None
-            };
-            *state = AutoHideState::default();
-            restore
-        }
-    });
-
-    if let Some(anchor) = restore_position {
-        let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-            x: anchor.x,
-            y: anchor.y,
-        }));
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        use raw_window_handle::HasWindowHandle;
-
-        if let Ok(handle) = window.window_handle() {
-            if let raw_window_handle::RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
-                let hwnd = HWND(win32_handle.hwnd.get() as *mut _);
-
-                unsafe {
-                    let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
-
-                    if fixed {
-                        // 设置为工具窗口样式，不显示在任务栏
-                        let new_style = (ex_style as u32 | WS_EX_TOOLWINDOW.0) & !WS_EX_APPWINDOW.0;
-                        SetWindowLongW(hwnd, GWL_EXSTYLE, new_style as i32);
-                    } else {
-                        // 恢复为普通窗口样式
-                        let new_style = (ex_style as u32 & !WS_EX_TOOLWINDOW.0) | WS_EX_APPWINDOW.0;
-                        SetWindowLongW(hwnd, GWL_EXSTYLE, new_style as i32);
-                    }
-                }
-            }
-        }
-    }
-
     sync_tray_fixed_checked(fixed);
 
     Ok(())
 }
 
 #[tauri::command]
-pub fn set_auto_hide_cursor_inside(inside: bool) -> Result<(), String> {
-    with_auto_hide_state(|state| {
-        state.cursor_inside_window = inside;
-    });
+pub fn set_auto_hide_cursor_inside(_inside: bool) -> Result<(), String> {
+    // 旧版贴边隐藏命令保留为空操作，兼容已安装旧前端或历史调用。
     Ok(())
+}
+
+#[tauri::command]
+pub fn set_exact_window_size(window: Window, width: i32, height: i32) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        set_window_size_win32(&window, width, height)?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        window
+            .set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                width: width.max(1) as u32,
+                height: height.max(1) as u32,
+            }))
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_window_exact_size_by_label(
+    app_handle: AppHandle,
+    label: String,
+    width: i32,
+    height: i32,
+) -> Result<(), String> {
+    let window = app_handle
+        .get_webview_window(&label)
+        .ok_or_else(|| format!("未找到窗口: {}", label))?;
+
+    #[cfg(target_os = "windows")]
+    {
+        set_window_size_win32(&window, width, height)?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        window
+            .set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                width: width.max(1) as u32,
+                height: height.max(1) as u32,
+            }))
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn hide_main_window(app_handle: AppHandle) -> Result<(), String> {
+    let window = app_handle
+        .get_webview_window("main")
+        .ok_or_else(|| "未找到主窗口".to_string())?;
+
+    #[cfg(target_os = "windows")]
+    {
+        hide_window_win32(&window)?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        window.hide().map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn show_main_window(app_handle: AppHandle) -> Result<(), String> {
+    let window = app_handle
+        .get_webview_window("main")
+        .ok_or_else(|| "未找到主窗口".to_string())?;
+
+    let _ = window.unminimize();
+
+    #[cfg(target_os = "windows")]
+    {
+        show_window_win32(&window)?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        window.show().map_err(|e| e.to_string())?;
+    }
+
+    let _ = window.set_focus();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn toggle_main_window(app_handle: AppHandle) -> Result<bool, String> {
+    let window = app_handle
+        .get_webview_window("main")
+        .ok_or_else(|| "未找到主窗口".to_string())?;
+
+    #[cfg(target_os = "windows")]
+    let visible = is_window_visible_win32(&window)?;
+
+    #[cfg(not(target_os = "windows"))]
+    let visible = window.is_visible().map_err(|e| e.to_string())?;
+
+    if visible {
+        #[cfg(target_os = "windows")]
+        {
+            hide_window_win32(&window)?;
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            window.hide().map_err(|e| e.to_string())?;
+        }
+
+        Ok(false)
+    } else {
+        let _ = window.unminimize();
+
+        #[cfg(target_os = "windows")]
+        {
+            show_window_win32(&window)?;
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            window.show().map_err(|e| e.to_string())?;
+        }
+
+        let _ = window.set_focus();
+        Ok(true)
+    }
 }
 
 #[tauri::command]
@@ -696,7 +432,7 @@ pub fn get_auto_hide_enabled(db: State<Database>) -> Result<bool, String> {
 
 #[tauri::command]
 pub fn set_auto_hide_enabled(
-    app_handle: tauri::AppHandle,
+    _app_handle: tauri::AppHandle,
     db: State<Database>,
     enabled: bool,
 ) -> Result<(), String> {
@@ -709,38 +445,6 @@ pub fn set_auto_hide_enabled(
     })
     .map_err(|e| e.to_string())?;
 
-    let restore_position = with_auto_hide_state(|state| {
-        state.enabled = enabled && is_fixed_mode();
-        if state.enabled {
-            state.hidden = false;
-            state.docked_edge = None;
-            state.edge_stick_started_at = None;
-            None
-        } else {
-            let restore = if state.hidden {
-                state.anchor_position.clone()
-            } else {
-                None
-            };
-            state.hidden = false;
-            state.docked_edge = None;
-            state.monitor_bounds = None;
-            state.anchor_size = None;
-            state.edge_stick_started_at = None;
-            restore
-        }
-    });
-
-    if let Some(anchor) = restore_position {
-        if let Some(main_window) = app_handle.get_webview_window("main") {
-            let _ = main_window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                x: anchor.x,
-                y: anchor.y,
-            }));
-            let _ = main_window.show();
-        }
-    }
-
     Ok(())
 }
 
@@ -749,24 +453,13 @@ pub fn get_window_persist_state(window: Window) -> Result<WindowPersistState, St
     let pos = window.outer_position().map_err(|e| e.to_string())?;
     let size = window.outer_size().map_err(|e| e.to_string())?;
 
-    let mut persist = WindowPersistState {
+    let persist = WindowPersistState {
         position: WindowPosition { x: pos.x, y: pos.y },
         size: WindowSize {
             width: size.width,
             height: size.height,
         },
     };
-
-    with_auto_hide_state(|state| {
-        if state.hidden {
-            if let Some(anchor) = &state.anchor_position {
-                persist.position = anchor.clone();
-            }
-            if let Some(anchor_size) = &state.anchor_size {
-                persist.size = anchor_size.clone();
-            }
-        }
-    });
 
     Ok(persist)
 }
@@ -784,8 +477,6 @@ pub fn reset_webview_window(window: WebviewWindow) -> Result<(), String> {
 
 /// 内部重置窗口实现
 fn reset_window_impl<T: tauri::Runtime>(window: &impl WindowExt<T>) -> Result<(), String> {
-    clear_auto_hide_runtime_state();
-
     // 重置到屏幕左上角（10%边距），默认大小 380x600
     let default_width = 380.0;
     let default_height = 600.0;

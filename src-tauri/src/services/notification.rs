@@ -2,9 +2,9 @@ use crate::db::Database;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::async_runtime;
+use tauri::Manager;
 use tauri::WebviewUrl;
 use tauri::WebviewWindowBuilder;
-use tauri::{Emitter, Listener, Manager};
 use tauri_plugin_notification::NotificationExt;
 
 // 通知窗口计数器（用于生成唯一的窗口标签）
@@ -19,6 +19,25 @@ const NOTIFICATION_MARGIN: u32 = 20;
 const NOTIFICATION_SPACING: u32 = 10;
 
 pub struct NotificationService;
+
+#[derive(Clone, Copy)]
+enum AppNotificationPosition {
+    BottomRight,
+    BottomLeft,
+    TopRight,
+    TopLeft,
+}
+
+impl AppNotificationPosition {
+    fn from_setting(value: &str) -> Self {
+        match value {
+            "bottom_left" => Self::BottomLeft,
+            "top_right" => Self::TopRight,
+            "top_left" => Self::TopLeft,
+            _ => Self::BottomRight,
+        }
+    }
+}
 
 impl NotificationService {
     /// 启动通知调度器，每分钟检查一次待办通知
@@ -65,6 +84,7 @@ impl NotificationService {
 
         // 获取通知类型设置
         let notification_type = Self::get_notification_type(&db);
+        let app_notification_position = Self::get_app_notification_position(&db);
 
         // 获取需要通知的待办
         let todos = Self::get_pending_notifications(&db)?;
@@ -73,7 +93,12 @@ impl NotificationService {
             // 根据设置发送不同类型的通知
             match notification_type.as_str() {
                 "app" => {
-                    Self::send_app_notification(app_handle, &todo.title, &todo.description)?;
+                    Self::send_app_notification(
+                        app_handle,
+                        &todo.title,
+                        &todo.description,
+                        app_notification_position,
+                    )?;
                 }
                 _ => {
                     Self::send_system_notification(app_handle, &todo.title, &todo.description)?;
@@ -100,6 +125,24 @@ impl NotificationService {
             Ok(result)
         })
         .unwrap_or_else(|_| "system".to_string())
+    }
+
+    /// 获取软件通知位置设置
+    fn get_app_notification_position(db: &Database) -> AppNotificationPosition {
+        let position = db
+            .with_connection(|conn| {
+                let result: String = conn
+                    .query_row(
+                        "SELECT value FROM settings WHERE key = 'app_notification_position'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or_else(|_| "bottom_right".to_string());
+                Ok(result)
+            })
+            .unwrap_or_else(|_| "bottom_right".to_string());
+
+        AppNotificationPosition::from_setting(&position)
     }
 
     /// 获取需要发送通知的待办列表
@@ -157,6 +200,7 @@ impl NotificationService {
         app_handle: &tauri::AppHandle,
         title: &str,
         description: &Option<String>,
+        position: AppNotificationPosition,
     ) -> Result<(), String> {
         // 生成唯一的窗口标签
         let counter = NOTIFICATION_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -165,16 +209,9 @@ impl NotificationService {
         // 获取当前活动通知数量，用于计算堆叠位置
         let active_count = ACTIVE_NOTIFICATIONS.fetch_add(1, Ordering::SeqCst);
 
-        // 获取主显示器信息以计算窗口位置
-        let (screen_width, screen_height) = Self::get_primary_screen_size(app_handle);
-
-        // 计算窗口位置（右下角堆叠）
-        // 新通知在上方，旧通知在下方
-        let x = screen_width - NOTIFICATION_WIDTH - NOTIFICATION_MARGIN;
-        let y = screen_height
-            - NOTIFICATION_HEIGHT
-            - NOTIFICATION_MARGIN
-            - (active_count * (NOTIFICATION_HEIGHT + NOTIFICATION_SPACING));
+        // 获取主显示器工作区，以逻辑像素计算通知窗口位置。
+        // Tauri 的窗口 position/inner_size 使用逻辑像素，而 monitor 返回物理像素。
+        let (x, y) = Self::calculate_notification_position(app_handle, active_count, position);
 
         // URL 编码标题和描述
         let encoded_title = urlencoding::encode(title);
@@ -208,25 +245,19 @@ impl NotificationService {
             window_builder = window_builder.transparent(true);
         }
 
-        let _ = window_builder.build().map_err(|e| e.to_string())?;
-
-        // 监听窗口关闭事件，减少活动通知计数
-        let _ = app_handle.listen(
-            format!("notification-closed-{}", window_label_clone),
-            move |_| {
-                ACTIVE_NOTIFICATIONS.fetch_sub(1, Ordering::SeqCst);
-            },
-        );
+        let _ = match window_builder.build() {
+            Ok(window) => window,
+            Err(e) => {
+                Self::decrement_active_notifications();
+                return Err(e.to_string());
+            }
+        };
 
         // 监听窗口销毁事件
         if let Some(window) = app_handle_clone.get_webview_window(&window_label_clone) {
-            let app_handle_for_destroy = app_handle_clone.clone();
-            let label_for_destroy = window_label_clone.clone();
             window.on_window_event(move |event| {
                 if let tauri::WindowEvent::Destroyed = event {
-                    ACTIVE_NOTIFICATIONS.fetch_sub(1, Ordering::SeqCst);
-                    let _ = app_handle_for_destroy
-                        .emit(&format!("notification-closed-{}", label_for_destroy), ());
+                    NotificationService::decrement_active_notifications();
                 }
             });
         }
@@ -235,14 +266,113 @@ impl NotificationService {
     }
 
     /// 获取主显示器尺寸
-    fn get_primary_screen_size(app_handle: &tauri::AppHandle) -> (u32, u32) {
-        // 尝试获取主显示器
+    fn calculate_notification_position(
+        app_handle: &tauri::AppHandle,
+        active_count: u32,
+        position: AppNotificationPosition,
+    ) -> (f64, f64) {
         if let Some(monitor) = app_handle.primary_monitor().ok().flatten() {
-            return (monitor.size().width, monitor.size().height);
+            let scale_factor = monitor.scale_factor().max(1.0);
+            let work_area = monitor.work_area();
+
+            let (physical_x, physical_y, physical_width, physical_height) =
+                if work_area.size.width > 0 && work_area.size.height > 0 {
+                    (
+                        work_area.position.x,
+                        work_area.position.y,
+                        work_area.size.width,
+                        work_area.size.height,
+                    )
+                } else {
+                    let monitor_position = monitor.position();
+                    let monitor_size = monitor.size();
+                    (
+                        monitor_position.x,
+                        monitor_position.y,
+                        monitor_size.width,
+                        monitor_size.height,
+                    )
+                };
+
+            let work_x = physical_x as f64 / scale_factor;
+            let work_y = physical_y as f64 / scale_factor;
+            let work_width = physical_width as f64 / scale_factor;
+            let work_height = physical_height as f64 / scale_factor;
+
+            return Self::position_in_work_area(
+                work_x,
+                work_y,
+                work_width,
+                work_height,
+                active_count,
+                position,
+            );
         }
 
-        // 回退到默认值
-        (1920, 1080)
+        Self::position_in_work_area(0.0, 0.0, 1920.0, 1080.0, active_count, position)
+    }
+
+    fn position_in_work_area(
+        work_x: f64,
+        work_y: f64,
+        work_width: f64,
+        work_height: f64,
+        active_count: u32,
+        position: AppNotificationPosition,
+    ) -> (f64, f64) {
+        let width = NOTIFICATION_WIDTH as f64;
+        let height = NOTIFICATION_HEIGHT as f64;
+        let margin = NOTIFICATION_MARGIN as f64;
+        let stack_step = (NOTIFICATION_HEIGHT + NOTIFICATION_SPACING) as f64;
+        let stack_offset = active_count as f64 * stack_step;
+
+        let min_x = work_x + margin;
+        let max_x = work_x + work_width - width - margin;
+        let min_y = work_y + margin;
+        let max_y = work_y + work_height - height - margin;
+
+        let x = match position {
+            AppNotificationPosition::BottomLeft | AppNotificationPosition::TopLeft => min_x,
+            AppNotificationPosition::BottomRight | AppNotificationPosition::TopRight => max_x,
+        };
+
+        let y = match position {
+            AppNotificationPosition::TopLeft | AppNotificationPosition::TopRight => {
+                min_y + stack_offset
+            }
+            AppNotificationPosition::BottomLeft | AppNotificationPosition::BottomRight => {
+                max_y - stack_offset
+            }
+        };
+
+        (
+            Self::clamp_axis(x, min_x, max_x),
+            Self::clamp_axis(y, min_y, max_y),
+        )
+    }
+
+    fn clamp_axis(value: f64, min: f64, max: f64) -> f64 {
+        if max < min {
+            min
+        } else {
+            value.clamp(min, max)
+        }
+    }
+
+    fn decrement_active_notifications() {
+        loop {
+            let current = ACTIVE_NOTIFICATIONS.load(Ordering::SeqCst);
+            if current == 0 {
+                return;
+            }
+
+            if ACTIVE_NOTIFICATIONS
+                .compare_exchange(current, current - 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                return;
+            }
+        }
     }
 
     /// 标记单条提醒为已通知

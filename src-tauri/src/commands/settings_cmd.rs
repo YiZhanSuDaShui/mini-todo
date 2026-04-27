@@ -40,6 +40,47 @@ pub fn set_notification_type(db: State<Database>, notification_type: String) -> 
     .map_err(|e| e.to_string())
 }
 
+fn normalize_app_notification_position(value: &str) -> String {
+    match value {
+        "bottom_left" | "top_right" | "top_left" => value.to_string(),
+        _ => "bottom_right".to_string(),
+    }
+}
+
+/// 获取软件通知位置设置
+#[tauri::command]
+pub fn get_app_notification_position(db: State<Database>) -> Result<String, String> {
+    db.with_connection(|conn| {
+        let result: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'app_notification_position'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| "bottom_right".to_string());
+        Ok(normalize_app_notification_position(&result))
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// 设置软件通知位置
+#[tauri::command]
+pub fn set_app_notification_position(
+    db: State<Database>,
+    app_notification_position: String,
+) -> Result<(), String> {
+    let valid_position = normalize_app_notification_position(&app_notification_position);
+
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('app_notification_position', ?1, datetime('now', 'localtime'))",
+            [&valid_position],
+        )?;
+        Ok(())
+    })
+    .map_err(|e| e.to_string())
+}
+
 const DEFAULT_AI_BASE_URL: &str = "https://api.deepseek.com";
 const DEFAULT_AI_MODEL: &str = "deepseek-v4-pro";
 

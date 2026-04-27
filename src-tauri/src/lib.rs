@@ -17,15 +17,17 @@ const DOUBLE_CLICK_THRESHOLD_MS: u64 = 500;
 use commands::{
     close_all_notification_windows, close_notification_window, create_subtask, create_todo,
     delete_screen_config, delete_subtask, delete_todo, export_data, export_data_to_file,
-    fetch_holidays, get_ai_settings, get_auto_hide_enabled, get_images_dir, get_notification_type,
-    get_screen_config, get_settings, get_show_calendar, get_subtask, get_sync_settings, get_todos,
-    get_window_persist_state, import_data, import_data_from_file, import_subtasks_from_paths,
-    is_fixed_mode, list_ai_models, list_screen_configs, plan_todo_with_ai, reorder_todos,
-    reset_window, save_ai_settings, save_screen_config, save_settings, save_subtask_image,
-    save_sync_settings, set_auto_hide_cursor_inside, set_auto_hide_enabled, set_notification_type,
-    set_show_calendar, set_window_fixed_mode, update_screen_config_name, update_subtask,
-    update_todo, webdav_apply_remote, webdav_auto_sync, webdav_download_sync,
-    webdav_test_connection, webdav_upload_sync,
+    fetch_holidays, get_ai_settings, get_app_notification_position, get_auto_hide_enabled,
+    get_images_dir, get_notification_type, get_screen_config, get_settings, get_show_calendar,
+    get_subtask, get_sync_settings, get_todos, get_window_persist_state, hide_main_window,
+    import_data, import_data_from_file, import_subtasks_from_paths, is_fixed_mode, list_ai_models,
+    list_screen_configs, plan_todo_with_ai, reorder_todos, reset_window, save_ai_settings,
+    save_screen_config, save_settings, save_subtask_image, save_sync_settings,
+    set_app_notification_position, set_auto_hide_cursor_inside, set_auto_hide_enabled,
+    set_exact_window_size, set_notification_type, set_show_calendar,
+    set_window_exact_size_by_label, set_window_fixed_mode, show_main_window, toggle_main_window,
+    update_screen_config_name, update_subtask, update_todo, webdav_apply_remote, webdav_auto_sync,
+    webdav_download_sync, webdav_test_connection, webdav_upload_sync,
 };
 
 #[cfg(target_os = "windows")]
@@ -99,7 +101,7 @@ pub fn run() {
             let toggle_fixed = CheckMenuItem::with_id(
                 app,
                 "toggle_fixed",
-                "固定模式",
+                "悬浮球入口",
                 true,
                 is_fixed_mode(),
                 None::<&str>,
@@ -135,7 +137,7 @@ pub fn run() {
                 ],
             )?;
 
-            // 保存托盘菜单项引用，供 set_window_fixed_mode 同步勾选状态
+            // 保存托盘菜单项引用，供悬浮球入口开关同步勾选状态
             commands::set_tray_toggle_fixed_item(toggle_fixed.clone());
 
             let _tray = TrayIconBuilder::new()
@@ -228,28 +230,6 @@ pub fn run() {
             // 启动通知调度器
             NotificationService::start_scheduler(app.handle().clone());
 
-            // 启动固定模式监听器（定时检测窗口最小化状态）
-            let handle = app.handle().clone();
-            std::thread::spawn(move || {
-                loop {
-                    std::thread::sleep(std::time::Duration::from_millis(200));
-
-                    // 只在固定模式下检测
-                    if is_fixed_mode() {
-                        if let Some(window) = handle.get_webview_window("main") {
-                            // 检查窗口是否被最小化
-                            if window.is_minimized().unwrap_or(false) {
-                                let _ = window.unminimize();
-                                let _ = window.show();
-                            }
-
-                            // 固定模式下贴边自动隐藏/唤起
-                            commands::tick_auto_hide(&window);
-                        }
-                    }
-                }
-            });
-
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -275,6 +255,11 @@ pub fn run() {
             get_auto_hide_enabled,
             set_auto_hide_enabled,
             set_auto_hide_cursor_inside,
+            set_exact_window_size,
+            set_window_exact_size_by_label,
+            hide_main_window,
+            show_main_window,
+            toggle_main_window,
             get_window_persist_state,
             reset_window,
             // 屏幕配置命令
@@ -296,6 +281,8 @@ pub fn run() {
             // 通知设置命令
             get_notification_type,
             set_notification_type,
+            get_app_notification_position,
+            set_app_notification_position,
             // 本地 AI 设置与时间规划命令
             get_ai_settings,
             save_ai_settings,

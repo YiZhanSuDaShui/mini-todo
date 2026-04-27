@@ -4,12 +4,14 @@ import { invoke } from '@tauri-apps/api/core'
 import type { Todo, CreateTodoRequest, UpdateTodoRequest, SubTask, CreateSubTaskRequest, UpdateSubTaskRequest, ViewMode, QuadrantType } from '@/types'
 import { QUADRANTS } from '@/types'
 
+const DEFAULT_VIEW_MODE: ViewMode = 'quadrant'
+
 export const useTodoStore = defineStore('todo', () => {
   // 状态
   const todos = ref<Todo[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
-  const viewMode = ref<ViewMode>('list')
+  const viewMode = ref<ViewMode>(DEFAULT_VIEW_MODE)
 
   // 计算属性
   const pendingTodos = computed(() => 
@@ -140,8 +142,14 @@ export const useTodoStore = defineStore('todo', () => {
   }
 
   // 加载视图模式设置
-  async function loadViewMode() {
+  async function loadViewMode(useStartupDefault = false) {
     try {
+      if (useStartupDefault) {
+        viewMode.value = DEFAULT_VIEW_MODE
+        await invoke('set_setting', { key: 'view_mode', value: DEFAULT_VIEW_MODE })
+        return
+      }
+
       const savedMode = await invoke<string | null>('get_setting', { key: 'view_mode' })
       if (savedMode === 'list' || savedMode === 'quadrant') {
         viewMode.value = savedMode

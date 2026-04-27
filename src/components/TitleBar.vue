@@ -1,22 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useAppStore, useTodoStore, APP_VERSION } from '@/stores'
+import { invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { ElMessageBox } from 'element-plus'
 import type { ViewMode } from '@/types'
 
 const appWindow = getCurrentWindow()
-
-function onTitleBarMouseDown(e: MouseEvent) {
-  if (e.buttons !== 1) return
-  if (appStore.isFixed) return
-  const target = e.target as HTMLElement
-  if (target.closest('[data-tauri-drag-region="false"]')) return
-  if (target.closest('button, input, textarea, select, a, [role="button"]')) return
-  e.preventDefault()
-  appWindow.startDragging()
-}
 
 const props = defineProps<{
   showCalendarControls?: boolean
@@ -37,8 +28,8 @@ const emit = defineEmits<{
 const appStore = useAppStore()
 const todoStore = useTodoStore()
 
-// 是否固定模式
-const isFixed = computed(() => appStore.isFixed)
+// 是否显示右侧悬浮球入口
+const floatingBubbleEnabled = computed(() => appStore.isFixed)
 
 // 是否深色主题
 const isDarkTheme = computed(() => appStore.isDarkTheme)
@@ -59,8 +50,8 @@ const hasUpdate = computed(() => appStore.hasUpdate)
 // 最新版本
 const latestVersion = computed(() => appStore.latestVersion)
 
-// 切换固定模式
-async function toggleFixed() {
+// 切换右侧悬浮球入口
+async function toggleFloatingBubble() {
   await appStore.toggleFixedMode()
 }
 
@@ -72,6 +63,19 @@ async function toggleTheme() {
 // 打开设置
 function openSettings() {
   emit('open-settings')
+}
+
+// 隐藏主窗口
+async function hideMainWindow(event?: MouseEvent) {
+  event?.preventDefault()
+  event?.stopPropagation()
+
+  try {
+    await invoke('hide_main_window')
+  } catch (e) {
+    console.error('Failed to hide main window:', e)
+    await appWindow.hide().catch(() => undefined)
+  }
 }
 
 // 点击版本号
@@ -99,9 +103,7 @@ async function handleVersionClick() {
 <template>
   <div
     class="title-bar"
-    :class="{ 'no-drag': isFixed, 'dark-theme': isDarkTheme }"
-    :data-tauri-drag-region="isFixed ? 'false' : 'deep'"
-    @mousedown="onTitleBarMouseDown"
+    :class="{ 'dark-theme': isDarkTheme }"
   >
     <div class="title-left">
       <span class="app-title-wrapper">
@@ -109,7 +111,6 @@ async function handleVersionClick() {
         <span
           class="version-tag"
           :class="{ 'has-update': hasUpdate }"
-          data-tauri-drag-region="false"
           @click="handleVersionClick"
         >
           v{{ APP_VERSION }}
@@ -119,20 +120,36 @@ async function handleVersionClick() {
     </div>
 
     <!-- 日历控制区域（居中显示） -->
-    <div v-if="showCalendarControls" class="title-center" data-tauri-drag-region="false">
+    <div v-if="showCalendarControls" class="title-center">
       <div class="calendar-nav">
-        <el-button text size="small" class="nav-btn" @click="emit('calendar-prev')">
+        <el-button
+          text
+          size="small"
+          class="nav-btn"
+          @click="emit('calendar-prev')"
+        >
           <el-icon><ArrowLeft /></el-icon>
         </el-button>
         <span class="current-month">{{ currentMonthText }}</span>
-        <el-button text size="small" class="nav-btn" @click="emit('calendar-next')">
+        <el-button
+          text
+          size="small"
+          class="nav-btn"
+          @click="emit('calendar-next')"
+        >
           <el-icon><ArrowRight /></el-icon>
         </el-button>
       </div>
-      <el-button size="small" class="today-btn" @click="emit('calendar-today')">今天</el-button>
+      <el-button
+        size="small"
+        class="today-btn"
+        @click="emit('calendar-today')"
+      >
+        今天
+      </el-button>
     </div>
 
-    <div class="title-right" data-tauri-drag-region="false">
+    <div class="title-right">
       <!-- 已完成按钮 -->
       <button 
         v-if="props.completedCount && props.completedCount > 0"
@@ -174,17 +191,14 @@ async function handleVersionClick() {
         </el-icon>
       </button>
 
-      <!-- 固定按钮 -->
+      <!-- 悬浮球入口开关 -->
       <button 
-        class="title-btn" 
-        :class="{ active: isFixed }"
-        :title="isFixed ? '取消固定' : '固定窗口'"
-        @click="toggleFixed"
+        class="title-btn floating-toggle-btn"
+        :class="{ active: floatingBubbleEnabled }"
+        :title="floatingBubbleEnabled ? '关闭悬浮球入口' : '开启悬浮球入口'"
+        @click="toggleFloatingBubble"
       >
-        <el-icon :size="16">
-          <Lock v-if="isFixed" />
-          <Unlock v-else />
-        </el-icon>
+        <span class="mini-bubble-icon" aria-hidden="true"></span>
       </button>
 
       <!-- 同步按钮 -->
@@ -208,6 +222,19 @@ async function handleVersionClick() {
           <Setting />
         </el-icon>
       </button>
+
+      <!-- 关闭按钮 -->
+      <button
+        class="title-btn close-btn"
+        type="button"
+        title="隐藏窗口"
+        @mousedown.stop
+        @click.stop.prevent="hideMainWindow"
+      >
+        <el-icon :size="16">
+          <Close />
+        </el-icon>
+      </button>
     </div>
   </div>
 </template>
@@ -215,10 +242,14 @@ async function handleVersionClick() {
 <style scoped>
 /* 标题栏默认可拖拽 */
 .title-bar {
+  position: relative;
   -webkit-app-region: drag;
   user-select: none;
   -webkit-user-select: none;
   cursor: default;
+  gap: 8px;
+  min-width: 0;
+  padding-right: 240px;
 }
 
 .title-bar * {
@@ -226,22 +257,23 @@ async function handleVersionClick() {
   -webkit-user-select: none;
 }
 
-/* 固定模式下禁用拖拽 */
-.title-bar.no-drag {
-  -webkit-app-region: no-drag !important;
-}
-
 /* 标题包装器 */
 .app-title-wrapper {
   display: flex;
   align-items: baseline;
+  min-width: 0;
 }
 
-/* 当有日历控制时，标题左侧固定 40% 宽度（与左侧面板对应） */
+/* 日历控制显示时，给右侧操作按钮保留稳定空间 */
 .title-bar:has(.title-center) {
   .title-left {
-    width: 40%;
-    min-width: 280px;
+    width: auto;
+    min-width: 150px;
+    max-width: 220px;
+    flex-shrink: 0;
+  }
+
+  .title-right {
     flex-shrink: 0;
   }
 }
@@ -250,9 +282,51 @@ async function handleVersionClick() {
 .title-center {
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: center;
+  gap: 8px;
   flex: 1;
+  min-width: 0;
+  -webkit-app-region: drag;
+}
+
+.title-right {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
   -webkit-app-region: no-drag;
+}
+
+.title-btn {
+  -webkit-app-region: no-drag;
+}
+
+.floating-toggle-btn .mini-bubble-icon {
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: currentColor;
+  position: relative;
+  display: block;
+}
+
+.floating-toggle-btn .mini-bubble-icon::after {
+  content: 'M';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+:global(body.dark-theme) .floating-toggle-btn .mini-bubble-icon::after {
+  color: rgba(15, 23, 42, 0.9);
 }
 
 .calendar-nav {
@@ -269,8 +343,9 @@ async function handleVersionClick() {
   color: var(--text-primary);
 }
 
-/* 非固定模式下的按钮样式 */
+/* 日历导航按钮样式 */
 .nav-btn {
+  -webkit-app-region: no-drag;
   color: var(--text-secondary) !important;
 
   &:hover {
@@ -284,6 +359,8 @@ async function handleVersionClick() {
 }
 
 .today-btn {
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
   color: var(--text-secondary) !important;
   background: var(--bg-secondary) !important;
   border-color: var(--border) !important;
@@ -326,12 +403,13 @@ async function handleVersionClick() {
   color: var(--text-tertiary, rgba(255, 255, 255, 0.45));
   cursor: default;
   user-select: none;
-  -webkit-app-region: no-drag;
+  -webkit-app-region: drag;
   white-space: nowrap;
 }
 
 .version-tag.has-update {
   cursor: pointer;
+  -webkit-app-region: no-drag;
 }
 
 .version-tag.has-update:hover {
@@ -367,6 +445,11 @@ async function handleVersionClick() {
   .el-icon {
     animation: spin 1s linear infinite;
   }
+}
+
+.close-btn:hover {
+  color: #ffffff;
+  background: #ef4444;
 }
 
 @keyframes spin {

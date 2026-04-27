@@ -238,6 +238,9 @@ pub struct AppSettings {
     /// 通知类型：system 或 app
     #[serde(default = "default_notification_type")]
     pub notification_type: String,
+    /// 软件通知位置：bottom_right、bottom_left、top_right、top_left
+    #[serde(default = "default_app_notification_position")]
+    pub app_notification_position: String,
 }
 
 fn default_text_theme() -> String {
@@ -249,11 +252,15 @@ fn default_auto_hide_enabled() -> bool {
 }
 
 fn default_view_mode() -> String {
-    "list".to_string()
+    "quadrant".to_string()
 }
 
 fn default_notification_type() -> String {
     "system".to_string()
+}
+
+fn default_app_notification_position() -> String {
+    "bottom_right".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -2,20 +2,44 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { getVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
+import { emit as emitTauriEvent, listen } from '@tauri-apps/api/event'
 import { getCurrentWindow, PhysicalPosition, PhysicalSize, availableMonitors, primaryMonitor } from '@tauri-apps/api/window'
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
+import packageJson from '../../package.json'
 import type { WindowPosition, WindowSize, WindowMode, ScreenConfig, SaveScreenConfigRequest, MonitorInfo } from '@/types'
 
 // 当前应用版本（从系统读取）
-export const APP_VERSION = ref<string>('')
+const APP_VERSION_FALLBACK = packageJson.version || '1.6.3'
+export const APP_VERSION = ref<string>(APP_VERSION_FALLBACK)
 // GitHub 仓库信息：用于检查更新和打开 Release 页面
 const GITHUB_OWNER = 'YiZhanSuDaShui'
 const GITHUB_REPO = 'mini-todo'
 const GITHUB_RELEASES_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases`
 const GITHUB_LATEST_RELEASE_API = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`
+const FLOATING_BUBBLE_LABEL = 'fixed-bubble'
+const FLOATING_BUBBLE_SIZE = 48
+const FLOATING_BUBBLE_MARGIN = 30
+const FLOATING_BUBBLE_STATE_EVENT = 'floating-bubble-state-changed'
 
 interface WindowPersistState {
   position: WindowPosition
   size: WindowSize
+}
+
+interface AppSettingsSnapshot {
+  isFixed: boolean
+  windowPosition: WindowPosition | null
+  windowSize: WindowSize | null
+  autoHideEnabled: boolean
+  textTheme: string
+  showCalendar: boolean
+  viewMode: string
+  notificationType: string
+}
+
+interface FloatingBubbleStatePayload {
+  enabled: boolean
+  source: string
 }
 
 export const useAppStore = defineStore('app', () => {
@@ -26,11 +50,12 @@ export const useAppStore = defineStore('app', () => {
   }
 
   async function loadAppVersion() {
-    if (APP_VERSION.value) return
     try {
-      APP_VERSION.value = await getVersion()
+      const version = await getVersion()
+      APP_VERSION.value = version || APP_VERSION_FALLBACK
     } catch (e) {
       console.error('Failed to load app version:', e)
+      APP_VERSION.value = APP_VERSION_FALLBACK
     }
   }
 
@@ -57,6 +82,227 @@ export const useAppStore = defineStore('app', () => {
 
   // 获取当前窗口
   const appWindow = getCurrentWindow()
+  let closingFloatingBubbleInternally = false
+  let floatingBubbleDestroyBound = false
+  let unlistenFloatingBubbleState: (() => void) | null = null
+
+  function setFloatingBubbleStateLocal(enabled: boolean) {
+    isFixed.value = enabled
+    windowMode.value = enabled ? 'fixed' : 'normal'
+  }
+
+  async function broadcastFloatingBubbleState(enabled: boolean) {
+    await emitTauriEvent(FLOATING_BUBBLE_STATE_EVENT, {
+      enabled,
+      source: appWindow.label
+    } satisfies FloatingBubbleStatePayload).catch((e) => {
+      console.warn('Failed to broadcast floating bubble state:', e)
+    })
+  }
+
+  async function listenFloatingBubbleStateChanges() {
+    if (unlistenFloatingBubbleState) return
+
+    unlistenFloatingBubbleState = await listen<FloatingBubbleStatePayload>(
+      FLOATING_BUBBLE_STATE_EVENT,
+      ({ payload }) => {
+        if (!payload || payload.source === appWindow.label) return
+
+        setFloatingBubbleStateLocal(payload.enabled)
+        void syncFloatingBubbleChecked(payload.enabled)
+
+        if (appWindow.label === 'main') {
+          void saveWindowState()
+        }
+      }
+    )
+  }
+
+  async function getPersistedFloatingBubbleEnabled(fallback: boolean) {
+    try {
+      const settings = await invoke<AppSettingsSnapshot>('get_settings')
+      return settings.isFixed
+    } catch (e) {
+      console.warn('Failed to load persisted floating bubble state:', e)
+      return fallback
+    }
+  }
+
+  async function loadFloatingBubbleEnabled() {
+    const enabled = await getPersistedFloatingBubbleEnabled(false)
+    setFloatingBubbleStateLocal(enabled)
+    await syncFloatingBubbleChecked(enabled)
+  }
+
+  async function saveFloatingBubbleSetting(enabled: boolean) {
+    const settings = await invoke<AppSettingsSnapshot>('get_settings')
+    await invoke('save_settings', {
+      settings: {
+        ...settings,
+        isFixed: enabled
+      }
+    })
+  }
+
+  async function getFloatingBubblePosition() {
+    const monitor = await primaryMonitor()
+    if (!monitor) {
+      return { x: 1200, y: 240 }
+    }
+
+    const scale = monitor.scaleFactor || 1
+    const monitorX = monitor.position.x / scale
+    const monitorY = monitor.position.y / scale
+    const monitorWidth = monitor.size.width / scale
+    const monitorHeight = monitor.size.height / scale
+
+    return {
+      x: Math.round(monitorX + monitorWidth - FLOATING_BUBBLE_SIZE - FLOATING_BUBBLE_MARGIN),
+      y: Math.round(monitorY + (monitorHeight - FLOATING_BUBBLE_SIZE) / 2)
+    }
+  }
+
+  async function showMainWindow() {
+    try {
+      await invoke('show_main_window')
+    } catch (e) {
+      console.error('Failed to show main window:', e)
+    }
+  }
+
+  async function syncFloatingBubbleChecked(enabled: boolean) {
+    await invoke('set_window_fixed_mode', { fixed: enabled }).catch((e) => {
+      console.warn('Failed to sync floating bubble checked state:', e)
+    })
+  }
+
+  function bindFloatingBubbleDestroyed(bubble: WebviewWindow) {
+    if (floatingBubbleDestroyBound) return
+    floatingBubbleDestroyBound = true
+
+    bubble.once('tauri://destroyed', () => {
+      floatingBubbleDestroyBound = false
+      if (closingFloatingBubbleInternally) {
+        closingFloatingBubbleInternally = false
+        return
+      }
+
+      if (isFixed.value) {
+        setFloatingBubbleStateLocal(false)
+        void syncFloatingBubbleChecked(false)
+        void saveWindowState()
+        void broadcastFloatingBubbleState(false)
+      }
+    })
+  }
+
+  async function waitForFloatingBubbleVisible(bubble: WebviewWindow, timeoutMs = 1200) {
+    const startedAt = Date.now()
+    await bubble.setAlwaysOnTop(true).catch(() => undefined)
+    await bubble.setSkipTaskbar(true).catch(() => undefined)
+    await bubble.show().catch(() => undefined)
+
+    while (Date.now() - startedAt < timeoutMs) {
+      try {
+        const current = await WebviewWindow.getByLabel(FLOATING_BUBBLE_LABEL)
+        const target = current || bubble
+
+        if (await target.isVisible().catch(() => false)) {
+          return true
+        }
+      } catch (e) {
+        console.warn('Waiting for floating bubble failed:', e)
+      }
+
+      await new Promise<void>(resolve => window.setTimeout(resolve, 50))
+    }
+
+    return false
+  }
+
+  async function correctFloatingBubbleSize(bubble?: WebviewWindow) {
+    const target = bubble || await WebviewWindow.getByLabel(FLOATING_BUBBLE_LABEL)
+    const scale = await target?.scaleFactor().catch(() => undefined) || 1
+    const physicalSize = Math.round(FLOATING_BUBBLE_SIZE * scale)
+
+    await invoke('set_window_exact_size_by_label', {
+      label: FLOATING_BUBBLE_LABEL,
+      width: physicalSize,
+      height: physicalSize
+    }).catch((e) => {
+      console.warn('Failed to correct floating bubble size:', e)
+    })
+  }
+
+  async function showFloatingBubble(): Promise<boolean> {
+    try {
+      const existing = await WebviewWindow.getByLabel(FLOATING_BUBBLE_LABEL)
+
+      if (existing) {
+        bindFloatingBubbleDestroyed(existing)
+        await existing.setAlwaysOnTop(true).catch(() => undefined)
+        await existing.setSkipTaskbar(true).catch(() => undefined)
+        await existing.show().catch(() => undefined)
+        await correctFloatingBubbleSize(existing)
+        return existing.isVisible().catch(() => true)
+      }
+
+      const position = await getFloatingBubblePosition()
+      const bubble = new WebviewWindow(FLOATING_BUBBLE_LABEL, {
+        url: '/#/floating-bubble',
+        title: 'Mini Todo',
+        width: FLOATING_BUBBLE_SIZE,
+        height: FLOATING_BUBBLE_SIZE,
+        minWidth: FLOATING_BUBBLE_SIZE,
+        minHeight: FLOATING_BUBBLE_SIZE,
+        maxWidth: FLOATING_BUBBLE_SIZE,
+        maxHeight: FLOATING_BUBBLE_SIZE,
+        x: position.x,
+        y: position.y,
+        resizable: false,
+        decorations: false,
+        transparent: true,
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        shadow: false,
+        focus: false,
+        focusable: true,
+        visible: true
+      })
+
+      let failed = false
+      bubble.once('tauri://error', (event) => {
+        failed = true
+        console.error('Failed to create floating bubble:', event.payload)
+      })
+      bindFloatingBubbleDestroyed(bubble)
+
+      const visible = await waitForFloatingBubbleVisible(bubble)
+      if (visible && !failed) {
+        await correctFloatingBubbleSize(bubble)
+      }
+      return visible && !failed
+    } catch (e) {
+      console.error('Failed to show floating bubble:', e)
+      return false
+    }
+  }
+
+  async function closeFloatingBubble() {
+    try {
+      const bubble = await WebviewWindow.getByLabel(FLOATING_BUBBLE_LABEL)
+      if (bubble) {
+        closingFloatingBubbleInternally = true
+        await bubble.close()
+        window.setTimeout(() => {
+          closingFloatingBubbleInternally = false
+        }, 1000)
+      }
+    } catch (e) {
+      closingFloatingBubbleInternally = false
+      console.error('Failed to close floating bubble:', e)
+    }
+  }
 
   /**
    * 生成当前屏幕配置的唯一标识
@@ -116,12 +362,13 @@ export const useAppStore = defineStore('app', () => {
     try {
       applyPlatformClass()
       await loadAppVersion()
+      await listenFloatingBubbleStateChanges()
       
       // 生成当前屏幕配置标识
       currentScreenConfigId.value = await generateScreenConfigId()
       console.log('Current screen config ID:', currentScreenConfigId.value)
 
-      // 加载贴边自动隐藏设置（需在固定模式应用前准备）
+      // 保留旧版设置读取，避免历史配置缺失
       await loadAutoHideEnabled()
 
       // 加载深色主题设置
@@ -135,11 +382,11 @@ export const useAppStore = defineStore('app', () => {
       if (savedConfig) {
         // 有保存的配置，恢复窗口状态
         console.log('Restoring saved screen config:', savedConfig)
+        const floatingEnabled = await getPersistedFloatingBubbleEnabled(savedConfig.isFixed)
         
-        isFixed.value = savedConfig.isFixed
+        setFloatingBubbleStateLocal(floatingEnabled)
         windowPosition.value = { x: savedConfig.windowX, y: savedConfig.windowY }
         windowSize.value = { width: savedConfig.windowWidth, height: savedConfig.windowHeight }
-        windowMode.value = savedConfig.isFixed ? 'fixed' : 'normal'
         
         // 恢复窗口位置
         try {
@@ -159,16 +406,17 @@ export const useAppStore = defineStore('app', () => {
           console.error('Failed to restore window size:', e)
         }
         
-        // 如果是固定模式，应用固定模式设置
-        if (savedConfig.isFixed) {
+        // 如果已开启悬浮球入口，则恢复悬浮球
+        if (floatingEnabled) {
           await applyFixedMode()
         }
+        await syncFloatingBubbleChecked(floatingEnabled)
       } else {
         // 没有保存的配置，使用主屏幕中心位置
         console.log('No saved config found, using primary monitor center')
+        const floatingEnabled = await getPersistedFloatingBubbleEnabled(false)
         
-        isFixed.value = false
-        windowMode.value = 'normal'
+        setFloatingBubbleStateLocal(floatingEnabled)
         
         try {
           const monitor = await primaryMonitor()
@@ -263,43 +511,65 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
-  // 切换固定模式
-  async function toggleFixedMode() {
-    try {
-      isFixed.value = !isFixed.value
-      windowMode.value = isFixed.value ? 'fixed' : 'normal'
+  // 设置悬浮球入口开关。沿用旧 isFixed 字段持久化，避免破坏历史数据。
+  async function setFloatingBubbleEnabled(enabled: boolean) {
+    const oldValue = isFixed.value
+    const oldMode = windowMode.value
 
-      // 应用窗口模式
+    try {
+      setFloatingBubbleStateLocal(enabled)
+
       if (isFixed.value) {
         await applyFixedMode()
       } else {
         await applyNormalMode()
       }
 
-      // 保存窗口状态到屏幕配置表和 settings 表
-      await saveWindowState()
+      await syncFloatingBubbleChecked(isFixed.value)
+      if (appWindow.label === 'main') {
+        await saveWindowState()
+      } else {
+        await saveFloatingBubbleSetting(isFixed.value)
+      }
+      await broadcastFloatingBubbleState(isFixed.value)
     } catch (e) {
-      console.error('Failed to toggle fixed mode:', e)
+      console.error('Failed to set floating bubble:', e)
+      setFloatingBubbleStateLocal(oldValue)
+      windowMode.value = oldMode
+      await syncFloatingBubbleChecked(oldValue)
+      await broadcastFloatingBubbleState(oldValue)
     }
   }
 
-  // 应用固定模式（仅锁定行为，不含主题）
+  // 切换悬浮球入口（旧方法名保留给托盘和现有调用）
+  async function toggleFixedMode() {
+    await setFloatingBubbleEnabled(!isFixed.value)
+  }
+
+  // 应用悬浮球入口：只显示右侧圆形入口，不隐藏主窗口，不影响新建待办按钮
   async function applyFixedMode() {
     try {
-      await appWindow.setResizable(false)
-      await invoke('set_window_fixed_mode', { fixed: true })
+      const bubbleReady = await showFloatingBubble()
+      if (!bubbleReady) {
+        setFloatingBubbleStateLocal(false)
+        await syncFloatingBubbleChecked(false)
+        throw new Error('悬浮球创建失败')
+      }
     } catch (e) {
-      console.error('Failed to apply fixed mode:', e)
+      console.error('Failed to show floating bubble:', e)
+      setFloatingBubbleStateLocal(false)
+      await closeFloatingBubble()
+      throw e
     }
   }
 
-  // 应用普通模式（仅解锁行为，不含主题）
+  // 关闭悬浮球入口；如果主窗口之前被悬浮球隐藏，则顺手恢复主窗口
   async function applyNormalMode() {
     try {
-      await appWindow.setResizable(true)
-      await invoke('set_window_fixed_mode', { fixed: false })
+      await closeFloatingBubble()
+      await showMainWindow()
     } catch (e) {
-      console.error('Failed to apply normal mode:', e)
+      console.error('Failed to close floating bubble:', e)
     }
   }
 
@@ -500,7 +770,11 @@ export const useAppStore = defineStore('app', () => {
     autoHideEnabled,
     // 方法
     initSettings,
+    loadAppVersion,
+    listenFloatingBubbleStateChanges,
     toggleFixedMode,
+    setFloatingBubbleEnabled,
+    loadFloatingBubbleEnabled,
     toggleDarkTheme,
     saveWindowState,
     exportData,

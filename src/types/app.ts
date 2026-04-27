@@ -13,6 +13,9 @@ export interface WindowSize {
 // 文本主题类型
 export type TextTheme = 'light' | 'dark'
 
+// 软件通知位置
+export type AppNotificationPosition = 'bottom_right' | 'bottom_left' | 'top_right' | 'top_left'
+
 // 应用设置接口
 export interface AppSettings {
   windowPosition: WindowPosition | null
@@ -21,6 +24,8 @@ export interface AppSettings {
   autoHideEnabled: boolean
   /** 文本主题：light（浅色文字，适配深色背景）或 dark（深色文字，适配浅色背景）*/
   textTheme: TextTheme
+  notificationType?: 'system' | 'app'
+  appNotificationPosition?: AppNotificationPosition
 }
 
 // 窗口模式

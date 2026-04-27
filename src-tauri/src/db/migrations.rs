@@ -128,6 +128,20 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("INSERT INTO migrations (version) VALUES (22)", [])?;
     }
 
+    if current_version < 23 {
+        migration_v23(conn)?;
+        conn.execute("INSERT INTO migrations (version) VALUES (23)", [])?;
+    }
+
+    Ok(())
+}
+
+/// 迁移 v23：增加软件通知位置设置，默认右下角。
+fn migration_v23(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('app_notification_position', 'bottom_right', datetime('now', 'localtime'))",
+        [],
+    )?;
     Ok(())
 }
 
@@ -421,9 +435,9 @@ fn migration_v5(conn: &Connection) -> Result<()> {
         [],
     )?;
 
-    // 初始化视图模式设置（默认列表模式）
+    // 初始化视图模式设置（默认四象限模式）
     conn.execute(
-        "INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('view_mode', 'list', datetime('now', 'localtime'))",
+        "INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('view_mode', 'quadrant', datetime('now', 'localtime'))",
         [],
     )?;
 

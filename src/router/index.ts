@@ -22,6 +22,11 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/NotificationView.vue')
   },
   {
+    path: '/floating-bubble',
+    name: 'floating-bubble',
+    component: () => import('@/views/FloatingBubbleView.vue')
+  },
+  {
     path: '/subtask-editor',
     name: 'subtask-editor',
     component: () => import('@/views/SubtaskEditorView.vue')

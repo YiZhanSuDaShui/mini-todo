@@ -97,22 +97,6 @@ function debouncedSaveState() {
   }, 500)
 }
 
-async function reportAutoHideCursorInside(inside: boolean) {
-  try {
-    await invoke('set_auto_hide_cursor_inside', { inside })
-  } catch {
-    // 忽略：该命令仅用于自动隐藏唤起辅助，不影响主流程
-  }
-}
-
-function handleRootMouseEnter() {
-  void reportAutoHideCursorInside(true)
-}
-
-function handleRootMouseLeave() {
-  void reportAutoHideCursorInside(false)
-}
-
 const preCalendarWidth = ref<number | null>(null)
 let calendarResizeReady = false
 
@@ -155,7 +139,7 @@ watch(showCalendar, async (show) => {
 onMounted(async () => {
   await appStore.initSettings()
   await todoStore.fetchTodos()
-  await todoStore.loadViewMode()
+  await todoStore.loadViewMode(true)
 
   await nextTick()
   calendarResizeReady = true
@@ -184,10 +168,7 @@ onMounted(async () => {
   })
   
   unlistenTrayReset = await listen('tray-reset-window', async () => {
-    // 重置后需要更新 appStore 状态并取消固定模式
-    if (appStore.isFixed) {
-      await appStore.toggleFixedMode()
-    }
+    // 重置窗口位置不影响悬浮球入口开关
     await appStore.initSettings()
   })
   
@@ -217,8 +198,6 @@ onMounted(async () => {
   // 初始化自动同步
   startAutoSync()
 
-  // 初始化鼠标在窗口内状态（用于 macOS 自动隐藏唤起）
-  void reportAutoHideCursorInside(true)
 })
 
 // 清理
@@ -237,7 +216,6 @@ onUnmounted(() => {
   if (saveDebounceTimer.value) {
     clearTimeout(saveDebounceTimer.value)
   }
-  void reportAutoHideCursorInside(false)
 })
 
 // 打开已完成列表窗口（模态）
@@ -535,11 +513,7 @@ function stopAutoSync() {
 </script>
 
 <template>
-  <div
-    :class="[containerClass, { 'with-calendar': showCalendar }]"
-    @mouseenter="handleRootMouseEnter"
-    @mouseleave="handleRootMouseLeave"
-  >
+  <div :class="[containerClass, { 'with-calendar': showCalendar }]">
     <!-- 模态遮罩层 -->
     <div v-if="isModalOpen" class="modal-overlay" @mousedown="bringModalToFront"></div>
     
@@ -588,9 +562,8 @@ function stopAutoSync() {
       </div>
     </div>
 
-    <!-- 悬浮添加按钮（固定模式下隐藏） -->
+    <!-- 悬浮添加按钮：与右侧悬浮球入口互不冲突 -->
     <button 
-      v-if="!appStore.isFixed" 
       class="fab-add" 
       title="新建待办" 
       @click="openEditor()"

@@ -14,6 +14,7 @@ const props = defineProps<{
   currentMonthText?: string
   completedCount?: number
   syncing?: boolean
+  syncNotice?: { message: string; kind: 'success' | 'info' | 'error' } | null
 }>()
 
 const emit = defineEmits<{
@@ -160,6 +161,17 @@ async function handleVersionClick() {
         <el-icon :size="16"><Finished /></el-icon>
       </button>
 
+      <!-- 同步结果提示 -->
+      <transition name="sync-notice-inline">
+        <div
+          v-if="props.syncNotice"
+          class="sync-notice-inline"
+          :class="`sync-notice-inline--${props.syncNotice.kind}`"
+        >
+          {{ props.syncNotice.message }}
+        </div>
+      </transition>
+
       <!-- 视图切换按钮 -->
       <button 
         class="title-btn view-toggle-btn" 
@@ -299,6 +311,51 @@ async function handleVersionClick() {
 
 .title-btn {
   -webkit-app-region: no-drag;
+}
+
+.sync-notice-inline {
+  -webkit-app-region: no-drag;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  width: fit-content;
+  max-width: 280px;
+  min-height: 28px;
+  padding: 0 12px;
+  border: 1px solid rgba(134, 239, 172, 0.9);
+  border-radius: 10px;
+  background: rgba(220, 252, 231, 0.96);
+  color: #166534;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 6px 18px rgba(22, 101, 52, 0.12);
+}
+
+.sync-notice-inline--info {
+  border-color: rgba(187, 247, 208, 0.95);
+  background: rgba(240, 253, 244, 0.96);
+  color: #15803d;
+}
+
+.sync-notice-inline--error {
+  border-color: rgba(254, 202, 202, 0.95);
+  background: rgba(254, 242, 242, 0.98);
+  color: #b91c1c;
+}
+
+.sync-notice-inline-enter-active,
+.sync-notice-inline-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.sync-notice-inline-enter-from,
+.sync-notice-inline-leave-to {
+  opacity: 0;
+  transform: translateX(6px);
 }
 
 .floating-toggle-btn .mini-bubble-icon {
@@ -442,9 +499,17 @@ async function handleVersionClick() {
 
 /* 同步按钮旋转动画 */
 .title-btn.syncing {
+  color: #16a34a !important;
+  background: rgba(22, 163, 74, 0.14) !important;
+  opacity: 1 !important;
+
   .el-icon {
     animation: spin 1s linear infinite;
   }
+}
+
+.title-btn.syncing:disabled {
+  cursor: progress;
 }
 
 .close-btn:hover {

@@ -1,7 +1,14 @@
 use reqwest::blocking::Client;
-use reqwest::header::CONTENT_TYPE;
+use reqwest::header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG, LAST_MODIFIED};
 use std::path::Path;
 use std::time::Duration;
+
+#[derive(Debug, Clone)]
+pub struct RemoteMetadata {
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub content_length: Option<u64>,
+}
 
 pub struct WebDavClient {
     client: Client,
@@ -87,6 +94,40 @@ impl WebDavClient {
         Ok(resp.status().is_success())
     }
 
+    pub fn metadata(&self, remote_path: &str) -> Result<Option<RemoteMetadata>, String> {
+        let url = self.full_url(remote_path);
+        let resp = self
+            .client
+            .head(&url)
+            .basic_auth(&self.username, Some(&self.password))
+            .send()
+            .map_err(|e| format!("查询文件信息失败: {}", e))?;
+
+        let status = resp.status().as_u16();
+        if status == 404 {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            return Err(format!("查询文件信息失败，状态码: {}", status));
+        }
+
+        let headers = resp.headers();
+        Ok(Some(RemoteMetadata {
+            etag: headers
+                .get(ETAG)
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.to_string()),
+            last_modified: headers
+                .get(LAST_MODIFIED)
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.to_string()),
+            content_length: headers
+                .get(CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse().ok()),
+        }))
+    }
+
     pub fn upload_bytes(
         &self,
         remote_path: &str,
@@ -139,6 +180,27 @@ impl WebDavClient {
         };
 
         self.upload_bytes(remote_path, &data, content_type)
+    }
+
+    pub fn delete(&self, remote_path: &str) -> Result<bool, String> {
+        let url = self.full_url(remote_path);
+
+        let resp = self
+            .client
+            .delete(&url)
+            .basic_auth(&self.username, Some(&self.password))
+            .send()
+            .map_err(|e| format!("删除远程文件失败: {}", e))?;
+
+        let status = resp.status().as_u16();
+        if status == 404 {
+            return Ok(false);
+        }
+        if status == 200 || status == 202 || status == 204 {
+            Ok(true)
+        } else {
+            Err(format!("删除远程文件失败，状态码: {}", status))
+        }
     }
 
     #[allow(dead_code)]

@@ -133,6 +133,60 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("INSERT INTO migrations (version) VALUES (23)", [])?;
     }
 
+    if current_version < 24 {
+        migration_v24(conn)?;
+        conn.execute("INSERT INTO migrations (version) VALUES (24)", [])?;
+    }
+
+    Ok(())
+}
+
+/// 迁移 v24：为双人增量同步增加稳定云端标识和删除墓碑。
+fn migration_v24(conn: &Connection) -> Result<()> {
+    add_column_if_missing(conn, "todos", "sync_id", "sync_id TEXT")?;
+    add_column_if_missing(conn, "subtasks", "sync_id", "sync_id TEXT")?;
+    add_column_if_missing(conn, "todo_reminders", "sync_id", "sync_id TEXT")?;
+
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_todos_sync_id
+             ON todos(sync_id) WHERE sync_id IS NOT NULL;
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_subtasks_sync_id
+             ON subtasks(sync_id) WHERE sync_id IS NOT NULL;
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_todo_reminders_sync_id
+             ON todo_reminders(sync_id) WHERE sync_id IS NOT NULL;
+
+         CREATE TABLE IF NOT EXISTS sync_tombstones (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity              TEXT NOT NULL,
+            sync_id             TEXT NOT NULL,
+            deleted_at          TEXT NOT NULL,
+            deleted_by_device_id TEXT NOT NULL,
+            created_at          TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            UNIQUE(entity, sync_id)
+         );
+         CREATE INDEX IF NOT EXISTS idx_sync_tombstones_entity
+             ON sync_tombstones(entity, sync_id);",
+    )?;
+    Ok(())
+}
+
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>>>()?;
+
+    if !columns.iter().any(|item| item == column) {
+        conn.execute(
+            &format!("ALTER TABLE {} ADD COLUMN {}", table, definition),
+            [],
+        )?;
+    }
     Ok(())
 }
 

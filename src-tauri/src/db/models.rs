@@ -1,5 +1,6 @@
 use rusqlite::{Connection, Row};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 pub const SUBTASK_COLUMNS: &str =
     "id, parent_id, title, content, completed, sort_order, created_at, updated_at";
@@ -77,13 +78,30 @@ pub fn replace_reminder_times_with_notified(
     reminder_times: &[String],
     notified: bool,
 ) -> rusqlite::Result<()> {
+    let mut existing_sync_ids: HashMap<String, Option<String>> = HashMap::new();
+    if let Ok(mut stmt) =
+        conn.prepare("SELECT notify_at, sync_id FROM todo_reminders WHERE todo_id = ?")
+    {
+        let rows = stmt.query_map([todo_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })?;
+        for row in rows {
+            let (notify_at, sync_id) = row?;
+            existing_sync_ids.insert(notify_at, sync_id);
+        }
+    }
+
     conn.execute("DELETE FROM todo_reminders WHERE todo_id = ?", [todo_id])?;
     let normalized = normalize_reminder_times(reminder_times);
     for (index, notify_at) in normalized.iter().enumerate() {
+        let sync_id = existing_sync_ids
+            .get(notify_at)
+            .and_then(|value| value.clone());
         conn.execute(
-            "INSERT INTO todo_reminders (todo_id, notify_at, notified, sort_order)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO todo_reminders (sync_id, todo_id, notify_at, notified, sort_order)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
             (
+                sync_id,
                 todo_id,
                 notify_at,
                 if notified { 1 } else { 0 },

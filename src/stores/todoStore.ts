@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { emit } from '@tauri-apps/api/event'
 import type { Todo, CreateTodoRequest, UpdateTodoRequest, SubTask, CreateSubTaskRequest, UpdateSubTaskRequest, ViewMode, QuadrantType } from '@/types'
 import { QUADRANTS } from '@/types'
 
@@ -12,6 +13,10 @@ export const useTodoStore = defineStore('todo', () => {
   const loading = ref(false)
   const error = ref<string | null>(null)
   const viewMode = ref<ViewMode>(DEFAULT_VIEW_MODE)
+
+  function notifyLocalChanged() {
+    emit('todo-local-changed').catch(() => undefined)
+  }
 
   // 计算属性
   const pendingTodos = computed(() => 
@@ -72,6 +77,7 @@ export const useTodoStore = defineStore('todo', () => {
     try {
       const newTodo = await invoke<Todo>('create_todo', { data })
       todos.value.push(newTodo)
+      notifyLocalChanged()
       return newTodo
     } catch (e) {
       error.value = String(e)
@@ -87,6 +93,7 @@ export const useTodoStore = defineStore('todo', () => {
       if (index !== -1) {
         todos.value[index] = updatedTodo
       }
+      notifyLocalChanged()
       return true
     } catch (e) {
       error.value = String(e)
@@ -99,6 +106,7 @@ export const useTodoStore = defineStore('todo', () => {
     try {
       await invoke('delete_todo', { id })
       todos.value = todos.value.filter(t => t.id !== id)
+      notifyLocalChanged()
       return true
     } catch (e) {
       error.value = String(e)
@@ -123,6 +131,7 @@ export const useTodoStore = defineStore('todo', () => {
           todo.sortOrder = index
         }
       })
+      notifyLocalChanged()
       return true
     } catch (e) {
       error.value = String(e)
@@ -141,31 +150,16 @@ export const useTodoStore = defineStore('todo', () => {
     viewMode.value = mode
   }
 
-  // 加载视图模式设置
+  // 视图模式仅在当前进程内保留；每次应用启动默认四象限。
   async function loadViewMode(useStartupDefault = false) {
-    try {
-      if (useStartupDefault) {
-        viewMode.value = DEFAULT_VIEW_MODE
-        await invoke('set_setting', { key: 'view_mode', value: DEFAULT_VIEW_MODE })
-        return
-      }
-
-      const savedMode = await invoke<string | null>('get_setting', { key: 'view_mode' })
-      if (savedMode === 'list' || savedMode === 'quadrant') {
-        viewMode.value = savedMode
-      }
-    } catch (e) {
-      console.error('Failed to load view mode:', e)
+    if (useStartupDefault) {
+      viewMode.value = DEFAULT_VIEW_MODE
     }
   }
 
-  // 保存视图模式设置
+  // 保留方法给标题栏调用，但不持久化到本机数据库或 WebDAV。
   async function saveViewMode() {
-    try {
-      await invoke('set_setting', { key: 'view_mode', value: viewMode.value })
-    } catch (e) {
-      console.error('Failed to save view mode:', e)
-    }
+    return
   }
 
   // 子任务操作
@@ -176,6 +170,7 @@ export const useTodoStore = defineStore('todo', () => {
       if (todo) {
         todo.subtasks.push(newSubTask)
       }
+      notifyLocalChanged()
       return newSubTask
     } catch (e) {
       error.value = String(e)
@@ -194,6 +189,7 @@ export const useTodoStore = defineStore('todo', () => {
           break
         }
       }
+      notifyLocalChanged()
       return true
     } catch (e) {
       error.value = String(e)
@@ -212,6 +208,7 @@ export const useTodoStore = defineStore('todo', () => {
           break
         }
       }
+      notifyLocalChanged()
       return true
     } catch (e) {
       error.value = String(e)

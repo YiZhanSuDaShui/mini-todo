@@ -1,11 +1,107 @@
+use crate::commands::sync_cmd::mark_webdav_local_dirty;
 use crate::db::{
-    load_reminder_times, replace_reminder_times, subtask_from_row, todo_from_row,
-    CreateSubTaskRequest, CreateTodoRequest, Database, SubTask, Todo, UpdateSubTaskRequest,
-    UpdateTodoRequest, SUBTASK_COLUMNS, TODO_COLUMNS,
+    load_reminder_times, normalize_reminder_times, replace_reminder_times, subtask_from_row,
+    todo_from_row, CreateSubTaskRequest, CreateTodoRequest, Database, SubTask, Todo,
+    UpdateSubTaskRequest, UpdateTodoRequest, SUBTASK_COLUMNS, TODO_COLUMNS,
 };
 use base64::{engine::general_purpose, Engine};
+use chrono::Local;
 use std::path::{Path, PathBuf};
 use tauri::State;
+
+fn now_db_time() -> String {
+    Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+fn get_or_create_sync_device_id(conn: &rusqlite::Connection) -> rusqlite::Result<String> {
+    if let Ok(device_id) = conn.query_row(
+        "SELECT value FROM settings WHERE key = 'webdav_device_id'",
+        [],
+        |row| row.get::<_, String>(0),
+    ) {
+        if !device_id.trim().is_empty() {
+            return Ok(device_id);
+        }
+    }
+
+    let device_id = format!("dev_{}", Local::now().timestamp_millis());
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value, updated_at)
+         VALUES ('webdav_device_id', ?1, datetime('now', 'localtime'))",
+        [&device_id],
+    )?;
+    Ok(device_id)
+}
+
+fn ensure_row_sync_id(
+    conn: &rusqlite::Connection,
+    table: &str,
+    prefix: &str,
+    id: i64,
+) -> rusqlite::Result<String> {
+    let current: Option<String> = conn
+        .query_row(
+            &format!("SELECT sync_id FROM {} WHERE id = ?1", table),
+            [id],
+            |row| row.get(0),
+        )
+        .ok()
+        .flatten();
+
+    if let Some(sync_id) = current {
+        if !sync_id.trim().is_empty() {
+            return Ok(sync_id);
+        }
+    }
+
+    let device_id = get_or_create_sync_device_id(conn)?;
+    let sync_id = format!("{}:{}:{}", prefix, device_id, id);
+    conn.execute(
+        &format!("UPDATE {} SET sync_id = ?1 WHERE id = ?2", table),
+        (&sync_id, id),
+    )?;
+    Ok(sync_id)
+}
+
+fn record_tombstone(
+    conn: &rusqlite::Connection,
+    entity: &str,
+    sync_id: &str,
+) -> rusqlite::Result<()> {
+    let device_id = get_or_create_sync_device_id(conn)?;
+    let deleted_at = now_db_time();
+    conn.execute(
+        "INSERT INTO sync_tombstones (entity, sync_id, deleted_at, deleted_by_device_id)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(entity, sync_id) DO UPDATE SET
+            deleted_at = excluded.deleted_at,
+            deleted_by_device_id = excluded.deleted_by_device_id",
+        (entity, sync_id, deleted_at, device_id),
+    )?;
+    Ok(())
+}
+
+fn record_removed_reminder_tombstones(
+    conn: &rusqlite::Connection,
+    todo_id: i64,
+    next_reminder_times: &[String],
+) -> rusqlite::Result<()> {
+    let next = normalize_reminder_times(next_reminder_times);
+    let mut stmt = conn.prepare("SELECT id, notify_at FROM todo_reminders WHERE todo_id = ?1")?;
+    let rows = stmt.query_map([todo_id], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    })?;
+
+    for row in rows {
+        let (reminder_id, notify_at) = row?;
+        if next.iter().any(|item| item == &notify_at) {
+            continue;
+        }
+        let sync_id = ensure_row_sync_id(conn, "todo_reminders", "reminder", reminder_id)?;
+        record_tombstone(conn, "reminder", &sync_id)?;
+    }
+    Ok(())
+}
 
 #[tauri::command]
 pub fn get_todos(db: State<Database>) -> Result<Vec<Todo>, String> {
@@ -68,6 +164,7 @@ pub fn create_todo(db: State<Database>, data: CreateTodoRequest) -> Result<Todo,
 
         let id = conn.last_insert_rowid();
         replace_reminder_times(conn, id, &data.reminder_times)?;
+        mark_webdav_local_dirty(conn)?;
 
         let sql = format!("SELECT {} FROM todos WHERE id = ?", TODO_COLUMNS);
         let mut todo = conn.query_row(&sql, [id], |row| todo_from_row(row))?;
@@ -144,8 +241,10 @@ pub fn update_todo(db: State<Database>, id: i64, data: UpdateTodoRequest) -> Res
         }
 
         if let Some(reminder_times) = reminder_times_update {
+            record_removed_reminder_tombstones(conn, id, &reminder_times)?;
             replace_reminder_times(conn, id, &reminder_times)?;
         }
+        mark_webdav_local_dirty(conn)?;
 
         let todo_sql = format!("SELECT {} FROM todos WHERE id = ?", TODO_COLUMNS);
         let mut todo = conn.query_row(&todo_sql, [id], |row| todo_from_row(row))?;
@@ -167,8 +266,11 @@ pub fn update_todo(db: State<Database>, id: i64, data: UpdateTodoRequest) -> Res
 #[tauri::command]
 pub fn delete_todo(db: State<Database>, id: i64) -> Result<(), String> {
     db.with_connection(|conn| {
+        let sync_id = ensure_row_sync_id(conn, "todos", "todo", id)?;
+        record_tombstone(conn, "todo", &sync_id)?;
         conn.execute("DELETE FROM todo_reminders WHERE todo_id = ?", [id])?;
         conn.execute("DELETE FROM todos WHERE id = ?", [id])?;
+        mark_webdav_local_dirty(conn)?;
         Ok(())
     })
     .map_err(|e| e.to_string())
@@ -182,6 +284,9 @@ pub fn reorder_todos(db: State<Database>, ids: Vec<i64>) -> Result<(), String> {
                 "UPDATE todos SET sort_order = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
                 (index as i32, id),
             )?;
+        }
+        if !ids.is_empty() {
+            mark_webdav_local_dirty(conn)?;
         }
         Ok(())
     })
@@ -206,6 +311,7 @@ pub fn create_subtask(db: State<Database>, data: CreateSubTaskRequest) -> Result
         )?;
 
         let id = conn.last_insert_rowid();
+        mark_webdav_local_dirty(conn)?;
 
         let sql = format!("SELECT {} FROM subtasks WHERE id = ?", SUBTASK_COLUMNS);
         conn.query_row(&sql, [id], |row| subtask_from_row(row))
@@ -255,6 +361,7 @@ pub fn update_subtask(
         conn.execute(&sql, params_refs.as_slice())?;
 
         let sql = format!("SELECT {} FROM subtasks WHERE id = ?", SUBTASK_COLUMNS);
+        mark_webdav_local_dirty(conn)?;
         conn.query_row(&sql, [id], |row| subtask_from_row(row))
     })
     .map_err(|e| e.to_string())
@@ -272,7 +379,10 @@ pub fn get_subtask(db: State<Database>, id: i64) -> Result<SubTask, String> {
 #[tauri::command]
 pub fn delete_subtask(db: State<Database>, id: i64) -> Result<(), String> {
     db.with_connection(|conn| {
+        let sync_id = ensure_row_sync_id(conn, "subtasks", "subtask", id)?;
+        record_tombstone(conn, "subtask", &sync_id)?;
         conn.execute("DELETE FROM subtasks WHERE id = ?", [id])?;
+        mark_webdav_local_dirty(conn)?;
         Ok(())
     })
     .map_err(|e| e.to_string())
@@ -382,6 +492,9 @@ pub fn import_subtasks_from_paths(
             created.push(subtask);
         }
 
+        if !created.is_empty() {
+            mark_webdav_local_dirty(conn)?;
+        }
         Ok(created)
     })
     .map_err(|e| e.to_string())

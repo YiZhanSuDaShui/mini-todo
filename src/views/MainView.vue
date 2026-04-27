@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, computed, ref, watch, nextTick } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { useTodoStore, useAppStore } from '@/stores'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { getCurrentWindow, primaryMonitor, currentMonitor, LogicalSize } from '@tauri-apps/api/window'
@@ -10,7 +10,7 @@ import TitleBar from '@/components/TitleBar.vue'
 import TodoList from '@/components/TodoList.vue'
 import QuadrantView from '@/components/QuadrantView.vue'
 import CalendarView from '@/components/CalendarView.vue'
-import type { Todo, SyncSettings, SyncDownloadResult } from '@/types'
+import type { Todo, SyncRunResult, SyncSettings } from '@/types'
 
 const todoStore = useTodoStore()
 const appStore = useAppStore()
@@ -18,6 +18,12 @@ const appWindow = getCurrentWindow()
 
 // 同步状态
 const isSyncing = ref(false)
+const isBackgroundSyncing = ref(false)
+const titleBarSyncing = computed(() => isSyncing.value || isBackgroundSyncing.value)
+const MIN_SYNC_INDICATOR_MS = 1200
+type SyncNoticeKind = 'success' | 'info' | 'error'
+const syncNotice = ref<{ message: string; kind: SyncNoticeKind } | null>(null)
+let syncNoticeTimer: ReturnType<typeof setTimeout> | null = null
 
 // 是否显示日历
 const showCalendar = computed(() => appStore.showCalendar)
@@ -67,9 +73,46 @@ let unlistenTrayOpenSettings: (() => void) | null = null
 let unlistenDataImported: (() => void) | null = null
 let unlistenFocus: (() => void) | null = null
 let unlistenSyncCompleted: (() => void) | null = null
+let unlistenTodoLocalChanged: (() => void) | null = null
 
 // 自动同步定时器
 let autoSyncTimer: ReturnType<typeof setInterval> | null = null
+let autoUploadTimer: ReturnType<typeof setTimeout> | null = null
+let lastAutoUploadAt = 0
+let backgroundSyncRunning = false
+
+function setBackgroundSyncRunning(value: boolean) {
+  backgroundSyncRunning = value
+  isBackgroundSyncing.value = value
+}
+
+function sleep(ms: number) {
+  return new Promise(resolve => window.setTimeout(resolve, ms))
+}
+
+async function keepSyncIndicatorVisible(startedAt: number) {
+  const remaining = MIN_SYNC_INDICATOR_MS - (Date.now() - startedAt)
+  if (remaining > 0) {
+    await sleep(remaining)
+  }
+}
+
+function showSyncNotice(message: string, kind: SyncNoticeKind = 'success') {
+  if (syncNoticeTimer) {
+    clearTimeout(syncNoticeTimer)
+  }
+  syncNotice.value = { message, kind }
+  syncNoticeTimer = setTimeout(() => {
+    syncNotice.value = null
+    syncNoticeTimer = null
+  }, 3200)
+}
+
+function syncResultMessage(result: SyncRunResult | string) {
+  const status = typeof result === 'string' ? result : result.status
+  if (status === 'no_changes') return '同步完成：暂无变化'
+  return '同步完成：已合并本地与云端'
+}
 
 // 防抖保存定时器
 const saveDebounceTimer = ref<number | null>(null)
@@ -137,6 +180,12 @@ watch(showCalendar, async (show) => {
 
 // 初始化
 onMounted(async () => {
+  if (appWindow.label !== 'main') {
+    console.error(`主页面被加载到了非主窗口中: ${appWindow.label}`)
+    await appWindow.close().catch(() => undefined)
+    return
+  }
+
   await appStore.initSettings()
   await todoStore.fetchTodos()
   await todoStore.loadViewMode(true)
@@ -195,8 +244,13 @@ onMounted(async () => {
     await todoStore.fetchTodos()
   })
 
+  unlistenTodoLocalChanged = await listen('todo-local-changed', () => {
+    scheduleAutoUpload()
+  })
+
   // 初始化自动同步
   startAutoSync()
+  runStartupSync()
 
 })
 
@@ -212,7 +266,13 @@ onUnmounted(() => {
   if (unlistenDataImported) unlistenDataImported()
   if (unlistenFocus) unlistenFocus()
   if (unlistenSyncCompleted) unlistenSyncCompleted()
+  if (unlistenTodoLocalChanged) unlistenTodoLocalChanged()
   stopAutoSync()
+  stopAutoUpload()
+  if (syncNoticeTimer) {
+    clearTimeout(syncNoticeTimer)
+    syncNoticeTimer = null
+  }
   if (saveDebounceTimer.value) {
     clearTimeout(saveDebounceTimer.value)
   }
@@ -399,7 +459,6 @@ async function openSettings() {
       isModalOpen.value = false
       activeModalWindow = null
       await todoStore.fetchTodos()
-      await todoStore.loadViewMode()
       await appStore.loadShowCalendar()
       startAutoSync()
     })
@@ -418,64 +477,27 @@ async function openSettings() {
 
 async function handleSync() {
   if (isSyncing.value) return
+  if (backgroundSyncRunning) {
+    ElMessage.info('后台同步正在进行，请稍后再试')
+    return
+  }
+  const syncStartedAt = Date.now()
   try {
     isSyncing.value = true
     const settings = await invoke<SyncSettings>('get_sync_settings')
     if (!settings.webdavUrl) {
-      ElMessage.warning('请先在设置中配置 WebDAV 服务器')
+      showSyncNotice('请先配置 WebDAV', 'info')
       return
     }
 
-    const result = await invoke<SyncDownloadResult>('webdav_download_sync')
-
-    if (result.hasRemote && result.hasConflict) {
-      try {
-        const action = await ElMessageBox.confirm(
-          `本地和云端数据均有更新，请选择操作：`,
-          '同步冲突',
-          {
-            confirmButtonText: '使用云端数据',
-            cancelButtonText: '保留本地数据',
-            distinguishCancelAndClose: true,
-            type: 'warning',
-          }
-        )
-        if (action === 'confirm' && result.remoteData) {
-          await invoke<string>('webdav_apply_remote', {
-            syncDataJson: JSON.stringify(result.remoteData),
-          })
-          await todoStore.fetchTodos()
-          ElMessage.success('已同步云端数据到本地')
-        } else {
-          await invoke<string>('webdav_upload_sync')
-          ElMessage.success('已上传本地数据到云端')
-        }
-      } catch (e) {
-        if (e === 'cancel') {
-          await invoke<string>('webdav_upload_sync')
-          ElMessage.success('已上传本地数据到云端')
-        }
-      }
-    } else if (result.hasRemote && result.remoteData) {
-      const remoteIsNewer = result.remoteUpdatedAt && result.localUpdatedAt
-        ? result.remoteUpdatedAt > result.localUpdatedAt
-        : !!result.remoteUpdatedAt
-
-      if (remoteIsNewer) {
-        await invoke<string>('webdav_apply_remote', {
-          syncDataJson: JSON.stringify(result.remoteData),
-        })
-        await todoStore.fetchTodos()
-      }
-      await invoke<string>('webdav_upload_sync')
-      ElMessage.success('同步完成')
-    } else {
-      await invoke<string>('webdav_upload_sync')
-      ElMessage.success('数据已上传到云端')
-    }
+    const result = await invoke<SyncRunResult>('webdav_sync_now')
+    await todoStore.fetchTodos()
+    showSyncNotice(syncResultMessage(result), result.status === 'no_changes' ? 'info' : 'success')
   } catch (e) {
-    ElMessage.error('同步失败: ' + String(e))
+    console.warn('Sync failed:', e)
+    showSyncNotice('同步失败：请检查网络', 'error')
   } finally {
+    await keepSyncIndicatorVisible(syncStartedAt)
     isSyncing.value = false
   }
 }
@@ -485,17 +507,21 @@ async function startAutoSync() {
   try {
     const settings = await invoke<SyncSettings>('get_sync_settings')
     if (settings.autoSync && settings.webdavUrl) {
-      const intervalMs = (settings.syncInterval || 15) * 60 * 1000
+      const intervalMs = syncIntervalToMs(settings.syncInterval || 15)
       autoSyncTimer = setInterval(async () => {
+        if (backgroundSyncRunning || isSyncing.value) return
+        const syncStartedAt = Date.now()
         try {
+          setBackgroundSyncRunning(true)
           const result = await invoke<string>('webdav_auto_sync')
-          if (result === 'conflict') {
-            console.log('Auto sync: conflict detected, skipping')
-          } else if (result !== 'no_changes') {
-            await todoStore.fetchTodos()
-          }
+          if (result !== 'no_changes') await todoStore.fetchTodos()
+          showSyncNotice(syncResultMessage(result), result === 'no_changes' ? 'info' : 'success')
         } catch (e) {
           console.warn('Auto sync failed:', e)
+          showSyncNotice('同步失败：请检查网络', 'error')
+        } finally {
+          await keepSyncIndicatorVisible(syncStartedAt)
+          setBackgroundSyncRunning(false)
         }
       }, intervalMs)
     }
@@ -510,6 +536,71 @@ function stopAutoSync() {
     autoSyncTimer = null
   }
 }
+
+function syncIntervalToMs(interval: number): number {
+  return interval === 90 ? 90 * 1000 : interval * 60 * 1000
+}
+
+async function runStartupSync() {
+  if (backgroundSyncRunning || isSyncing.value) return
+  const syncStartedAt = Date.now()
+  try {
+    const settings = await invoke<SyncSettings>('get_sync_settings')
+    if (!settings.startupSync || !settings.webdavUrl) return
+    setBackgroundSyncRunning(true)
+    const result = await invoke<SyncRunResult>('webdav_sync_now')
+    if (result.status === 'synced') {
+      await todoStore.fetchTodos()
+    }
+    showSyncNotice(syncResultMessage(result), result.status === 'no_changes' ? 'info' : 'success')
+  } catch (e) {
+    console.warn('Startup sync failed:', e)
+    showSyncNotice('同步失败：请检查网络', 'error')
+  } finally {
+    await keepSyncIndicatorVisible(syncStartedAt)
+    setBackgroundSyncRunning(false)
+  }
+}
+
+function scheduleAutoUpload() {
+  if (autoUploadTimer) clearTimeout(autoUploadTimer)
+  autoUploadTimer = setTimeout(async () => {
+    if (backgroundSyncRunning || isSyncing.value) {
+      scheduleAutoUpload()
+      return
+    }
+    const now = Date.now()
+    if (now - lastAutoUploadAt < 8000) {
+      scheduleAutoUpload()
+      return
+    }
+    const syncStartedAt = Date.now()
+    try {
+      const settings = await invoke<SyncSettings>('get_sync_settings')
+      if (!settings.autoSync || !settings.webdavUrl) return
+      lastAutoUploadAt = now
+      setBackgroundSyncRunning(true)
+      const result = await invoke<SyncRunResult>('webdav_sync_now')
+      if (result.status === 'synced') {
+        await todoStore.fetchTodos()
+      }
+      showSyncNotice(syncResultMessage(result), result.status === 'no_changes' ? 'info' : 'success')
+    } catch (e) {
+      console.warn('Auto upload after edit failed:', e)
+      showSyncNotice('同步失败：请检查网络', 'error')
+    } finally {
+      await keepSyncIndicatorVisible(syncStartedAt)
+      setBackgroundSyncRunning(false)
+    }
+  }, 15000)
+}
+
+function stopAutoUpload() {
+  if (autoUploadTimer) {
+    clearTimeout(autoUploadTimer)
+    autoUploadTimer = null
+  }
+}
 </script>
 
 <template>
@@ -522,7 +613,8 @@ function stopAutoSync() {
       :show-calendar-controls="showCalendar"
       :current-month-text="calendarMonthText"
       :completed-count="completedCount"
-      :syncing="isSyncing"
+      :syncing="titleBarSyncing"
+      :sync-notice="syncNotice"
       @open-settings="openSettings"
       @open-completed="openCompletedWindow"
       @calendar-prev="handleCalendarPrev"

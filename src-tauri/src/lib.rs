@@ -1,34 +1,41 @@
 mod commands;
 mod db;
 mod services;
+#[cfg(target_os = "windows")]
+mod windows_tray;
 
 use db::Database;
 use services::NotificationService;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Emitter, Manager};
-use tauri_plugin_autostart::ManagerExt;
+#[cfg(not(target_os = "windows"))]
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+#[cfg(not(target_os = "windows"))]
+use tauri::tray::TrayIconBuilder;
+use tauri::Manager;
 
-// 记录上次点击时间（用于双击检测）
-static LAST_CLICK_TIME: AtomicU64 = AtomicU64::new(0);
-const DOUBLE_CLICK_THRESHOLD_MS: u64 = 500;
 use commands::{
     close_all_notification_windows, close_notification_window, create_subtask, create_todo,
-    delete_screen_config, delete_subtask, delete_todo, export_data, export_data_to_file,
+    delete_screen_config, delete_subtask, delete_todo, exit_app, export_data, export_data_to_file,
     fetch_holidays, get_ai_settings, get_app_notification_position, get_auto_hide_enabled,
     get_images_dir, get_notification_type, get_screen_config, get_settings, get_show_calendar,
     get_subtask, get_sync_settings, get_todos, get_window_persist_state, hide_main_window,
-    import_data, import_data_from_file, import_subtasks_from_paths, is_fixed_mode, list_ai_models,
+    import_data, import_data_from_file, import_subtasks_from_paths, list_ai_models,
     list_screen_configs, plan_todo_with_ai, reorder_todos, reset_window, save_ai_settings,
     save_screen_config, save_settings, save_subtask_image, save_sync_settings,
     set_app_notification_position, set_auto_hide_cursor_inside, set_auto_hide_enabled,
     set_exact_window_size, set_notification_type, set_show_calendar,
     set_window_exact_size_by_label, set_window_fixed_mode, show_main_window, toggle_main_window,
     update_screen_config_name, update_subtask, update_todo, webdav_apply_remote, webdav_auto_sync,
-    webdav_download_sync, webdav_test_connection, webdav_upload_sync,
+    webdav_download_sync, webdav_sync_now, webdav_test_connection, webdav_upload_sync,
 };
+
+#[cfg(not(target_os = "windows"))]
+fn show_main_window_from_tray(app: &tauri::AppHandle) {
+    if let Some(webview_window) = app.get_webview_window("main") {
+        let _ = webview_window.unminimize();
+        let _ = webview_window.show();
+        let _ = webview_window.set_focus();
+    }
+}
 
 #[cfg(target_os = "windows")]
 fn setup_window_rounded_corners(window: &tauri::WebviewWindow) {
@@ -97,135 +104,36 @@ pub fn run() {
                 }
             }
 
-            // 创建系统托盘菜单项
-            let toggle_fixed = CheckMenuItem::with_id(
-                app,
-                "toggle_fixed",
-                "悬浮球入口",
-                true,
-                is_fixed_mode(),
-                None::<&str>,
-            )?;
-            let reset = MenuItem::with_id(app, "reset", "重置位置", true, None::<&str>)?;
-            let add_todo = MenuItem::with_id(app, "add_todo", "添加待办项", true, None::<&str>)?;
-            let open_settings =
-                MenuItem::with_id(app, "open_settings", "打开设置", true, None::<&str>)?;
-            let auto_start_enabled = app.autolaunch().is_enabled().unwrap_or(false);
-            let auto_start = CheckMenuItem::with_id(
-                app,
-                "auto_start",
-                "开机自启动",
-                true,
-                auto_start_enabled,
-                None::<&str>,
-            )?;
-            let separator1 = PredefinedMenuItem::separator(app)?;
-            let separator2 = PredefinedMenuItem::separator(app)?;
-            let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+            #[cfg(target_os = "windows")]
+            {
+                let tray = windows_tray::install(app.handle().clone())
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                app.manage(tray);
+            }
 
-            let menu = Menu::with_items(
-                app,
-                &[
-                    &add_todo,
-                    &separator1,
-                    &toggle_fixed,
-                    &reset,
-                    &open_settings,
-                    &auto_start,
-                    &separator2,
-                    &quit,
-                ],
-            )?;
+            #[cfg(not(target_os = "windows"))]
+            {
+                let title = MenuItem::with_id(app, "title", "Mini Todo", false, None::<&str>)?;
+                let separator = PredefinedMenuItem::separator(app)?;
+                let show_main =
+                    MenuItem::with_id(app, "show_main", "展开界面", true, None::<&str>)?;
+                let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+                let tray_menu = Menu::with_items(app, &[&title, &separator, &show_main, &quit])?;
 
-            // 保存托盘菜单项引用，供悬浮球入口开关同步勾选状态
-            commands::set_tray_toggle_fixed_item(toggle_fixed.clone());
-
-            let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(move |app: &tauri::AppHandle, event| {
-                    match event.id().as_ref() {
-                        "toggle_fixed" => {
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.emit::<()>("tray-toggle-fixed", ());
-                            }
-                        }
-                        "reset" => {
-                            // 重置窗口位置
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = commands::reset_webview_window(window);
-                            }
-                            // 发送事件通知前端更新状态
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.emit::<()>("tray-reset-window", ());
-                            }
-                        }
-                        "add_todo" => {
-                            // 发送事件给前端打开添加待办窗口
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.emit::<()>("tray-add-todo", ());
-                            }
-                        }
-                        "open_settings" => {
-                            // 发送事件给前端打开设置窗口
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                                let _ = window.emit::<()>("tray-open-settings", ());
-                            }
-                        }
-                        "auto_start" => {
-                            // 切换开机自启动
-                            let autolaunch = app.autolaunch();
-                            let currently_enabled = autolaunch.is_enabled().unwrap_or(false);
-                            if currently_enabled {
-                                let _ = autolaunch.disable();
-                            } else {
-                                let _ = autolaunch.enable();
-                            }
-                            // CheckMenuItem 会自动切换勾选状态
-                        }
+                let _tray = TrayIconBuilder::new()
+                    .icon(app.default_window_icon().unwrap().clone())
+                    .tooltip("Mini Todo")
+                    .menu(&tray_menu)
+                    .show_menu_on_left_click(true)
+                    .on_menu_event(|app: &tauri::AppHandle, event| match event.id().as_ref() {
+                        "show_main" => show_main_window_from_tray(app),
                         "quit" => {
                             app.exit(0);
                         }
                         _ => {}
-                    }
-                })
-                .on_tray_icon_event(|tray: &tauri::tray::TrayIcon, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let now = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_millis() as u64;
-                        let last_click = LAST_CLICK_TIME.swap(now, Ordering::SeqCst);
-
-                        let app = tray.app_handle();
-
-                        // 检测双击
-                        if now - last_click < DOUBLE_CLICK_THRESHOLD_MS {
-                            // 双击：打开添加待办窗口
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.emit::<()>("tray-add-todo", ());
-                            }
-                            // 重置时间避免连续触发
-                            LAST_CLICK_TIME.store(0, Ordering::SeqCst);
-                        } else {
-                            // 单击：显示/聚焦主窗口
-                            if let Some(webview_window) = app.get_webview_window("main") {
-                                let _ = webview_window.unminimize();
-                                let _ = webview_window.show();
-                                let _ = webview_window.set_focus();
-                            }
-                        }
-                    }
-                })
-                .build(app)?;
+                    })
+                    .build(app)?;
+            }
 
             // 启动通知调度器
             NotificationService::start_scheduler(app.handle().clone());
@@ -260,6 +168,7 @@ pub fn run() {
             hide_main_window,
             show_main_window,
             toggle_main_window,
+            exit_app,
             get_window_persist_state,
             reset_window,
             // 屏幕配置命令
@@ -299,6 +208,7 @@ pub fn run() {
             webdav_download_sync,
             webdav_apply_remote,
             webdav_auto_sync,
+            webdav_sync_now,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

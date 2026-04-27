@@ -357,6 +357,50 @@ export const useAppStore = defineStore('app', () => {
     return `${count}屏: ${monitors.join(' + ')}`
   }
 
+  async function isWindowRectUsable(position: WindowPosition, size: WindowSize) {
+    if (size.width < 320 || size.height < 400) return false
+
+    const monitors = await availableMonitors()
+    if (monitors.length === 0) return true
+
+    const left = position.x
+    const top = position.y
+    const right = position.x + size.width
+    const bottom = position.y + size.height
+
+    return monitors.some((monitor) => {
+      const monitorLeft = monitor.position.x
+      const monitorTop = monitor.position.y
+      const monitorRight = monitor.position.x + monitor.size.width
+      const monitorBottom = monitor.position.y + monitor.size.height
+
+      const overlapWidth = Math.min(right, monitorRight) - Math.max(left, monitorLeft)
+      const overlapHeight = Math.min(bottom, monitorBottom) - Math.max(top, monitorTop)
+      return overlapWidth >= 120 && overlapHeight >= 120
+    })
+  }
+
+  async function centerMainWindowOnPrimary() {
+    const monitor = await primaryMonitor()
+    if (!monitor) return null
+
+    const defaultWidth = 380
+    const defaultHeight = 600
+    const scale = monitor.scaleFactor
+    const width = Math.round(defaultWidth * scale)
+    const height = Math.round(defaultHeight * scale)
+    const centerX = Math.round(monitor.position.x + (monitor.size.width - width) / 2)
+    const centerY = Math.round(monitor.position.y + (monitor.size.height - height) / 2)
+
+    await appWindow.setPosition(new PhysicalPosition(centerX, centerY))
+    await appWindow.setSize(new PhysicalSize(width, height))
+
+    return {
+      position: { x: centerX, y: centerY },
+      size: { width, height }
+    }
+  }
+
   // 初始化应用设置
   async function initSettings() {
     try {
@@ -379,7 +423,14 @@ export const useAppStore = defineStore('app', () => {
         configId: currentScreenConfigId.value
       })
       
-      if (savedConfig) {
+      const savedConfigUsable = savedConfig
+        ? await isWindowRectUsable(
+            { x: savedConfig.windowX, y: savedConfig.windowY },
+            { width: savedConfig.windowWidth, height: savedConfig.windowHeight }
+          )
+        : false
+
+      if (savedConfig && savedConfigUsable) {
         // 有保存的配置，恢复窗口状态
         console.log('Restoring saved screen config:', savedConfig)
         const floatingEnabled = await getPersistedFloatingBubbleEnabled(savedConfig.isFixed)
@@ -412,32 +463,17 @@ export const useAppStore = defineStore('app', () => {
         }
         await syncFloatingBubbleChecked(floatingEnabled)
       } else {
-        // 没有保存的配置，使用主屏幕中心位置
-        console.log('No saved config found, using primary monitor center')
+        // 没有保存的配置，或保存的是隐藏/离屏产生的坏配置，则使用主屏幕中心位置。
+        console.log(savedConfig ? 'Saved config is offscreen, using primary monitor center' : 'No saved config found, using primary monitor center')
         const floatingEnabled = await getPersistedFloatingBubbleEnabled(false)
         
         setFloatingBubbleStateLocal(floatingEnabled)
         
         try {
-          const monitor = await primaryMonitor()
-          if (monitor) {
-            const defaultWidth = 380
-            const defaultHeight = 600
-            const scale = monitor.scaleFactor
-            
-            // 计算主屏幕中心位置（逻辑坐标转物理坐标）
-            const centerX = Math.round(
-              monitor.position.x + (monitor.size.width - defaultWidth * scale) / 2
-            )
-            const centerY = Math.round(
-              monitor.position.y + (monitor.size.height - defaultHeight * scale) / 2
-            )
-            
-            await appWindow.setPosition(new PhysicalPosition(centerX, centerY))
-            await appWindow.setSize(new PhysicalSize(defaultWidth * scale, defaultHeight * scale))
-            
-            windowPosition.value = { x: centerX, y: centerY }
-            windowSize.value = { width: Math.round(defaultWidth * scale), height: Math.round(defaultHeight * scale) }
+          const centered = await centerMainWindowOnPrimary()
+          if (centered) {
+            windowPosition.value = centered.position
+            windowSize.value = centered.size
           }
         } catch (e) {
           console.error('Failed to center window:', e)
@@ -600,9 +636,20 @@ export const useAppStore = defineStore('app', () => {
   // 保存窗口状态（位置和尺寸）到当前屏幕配置
   async function saveWindowState() {
     try {
+      if (appWindow.label !== 'main') return
+
+      const visible = await appWindow.isVisible().catch(() => true)
+      if (!visible) return
+
       const persistState = await invoke<WindowPersistState>('get_window_persist_state')
       const position = persistState.position
       const size = persistState.size
+
+      if (!await isWindowRectUsable(position, size)) {
+        console.warn('Skip saving unusable main window state:', { position, size })
+        return
+      }
+
       windowPosition.value = { x: position.x, y: position.y }
       windowSize.value = { width: size.width, height: size.height }
       

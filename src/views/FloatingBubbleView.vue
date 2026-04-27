@@ -33,6 +33,7 @@ let dragMoveFrame: number | null = null
 let latestDragCursorX = 0
 let latestDragCursorY = 0
 let mainWindowShownByBubble = false
+let lastToggleAt = 0
 let dragStart: {
   offsetX: number
   offsetY: number
@@ -243,6 +244,10 @@ function scheduleSnap() {
 }
 
 async function toggleMainWindow() {
+  const now = performance.now()
+  if (now - lastToggleAt < 350) return
+  lastToggleAt = now
+
   try {
     mainWindowShownByBubble = await invoke<boolean>('toggle_main_window')
     return
@@ -387,11 +392,24 @@ async function handlePointerUp(event: PointerEvent) {
   await toggleMainWindow()
 }
 
+async function handleBubbleClick(event: MouseEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+
+  if (isDragging || dragging.value) return
+  await toggleMainWindow()
+}
+
 function handleContextMenu(event: MouseEvent) {
   event.preventDefault()
 }
 
 onMounted(async () => {
+  if (bubbleWindow.label !== 'fixed-bubble') {
+    console.error(`悬浮球页面被加载到了错误窗口中: ${bubbleWindow.label}`)
+    return
+  }
+
   document.addEventListener('pointermove', handlePointerMove)
   document.addEventListener('pointerup', handlePointerUp)
   document.addEventListener('pointercancel', handlePointerCancel)
@@ -407,9 +425,6 @@ onMounted(async () => {
   await bubbleWindow.setSkipTaskbar(true)
   const scale = await bubbleWindow.scaleFactor().catch(() => 1)
   const physicalSize = Math.round(BALL_SIZE * scale)
-  await invoke('set_exact_window_size', { width: physicalSize, height: physicalSize }).catch((e) => {
-    console.error('校正悬浮球窗口尺寸失败:', e)
-  })
   await invoke('set_window_exact_size_by_label', {
     label: 'fixed-bubble',
     width: physicalSize,
@@ -417,7 +432,6 @@ onMounted(async () => {
   }).catch((e) => {
     console.error('按标签校正悬浮球窗口尺寸失败:', e)
   })
-  await snapToEdge('right')
 })
 
 onUnmounted(() => {
@@ -441,6 +455,7 @@ onUnmounted(() => {
     role="button"
     title="Mini Todo"
     @pointerdown="handlePointerDown"
+    @click="handleBubbleClick"
   >
     <div class="floating-ball-inner">
       <span class="floating-ball-letter">Z</span>

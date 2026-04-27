@@ -3,7 +3,6 @@ use crate::db::{
 };
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
 use tauri::{AppHandle, Manager, State, WebviewWindow, Window};
 
 #[cfg(target_os = "windows")]
@@ -16,26 +15,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 /// 全局悬浮球入口状态（沿用旧命名以兼容历史调用）
 pub static IS_FIXED_MODE: AtomicBool = AtomicBool::new(false);
-
-/// 托盘"悬浮球入口"勾选菜单项引用，用于跨模块同步状态
-static TRAY_TOGGLE_FIXED: OnceLock<tauri::menu::CheckMenuItem<tauri::Wry>> = OnceLock::new();
-
-/// 检查当前是否开启悬浮球入口
-pub fn is_fixed_mode() -> bool {
-    IS_FIXED_MODE.load(Ordering::SeqCst)
-}
-
-/// 保存托盘"悬浮球入口"勾选菜单项引用（在 setup 阶段调用一次）
-pub fn set_tray_toggle_fixed_item(item: tauri::menu::CheckMenuItem<tauri::Wry>) {
-    let _ = TRAY_TOGGLE_FIXED.set(item);
-}
-
-/// 同步更新托盘菜单项勾选状态
-fn sync_tray_fixed_checked(fixed: bool) {
-    if let Some(item) = TRAY_TOGGLE_FIXED.get() {
-        let _ = item.set_checked(fixed);
-    }
-}
 
 #[cfg(target_os = "windows")]
 fn hwnd_from_window<T: raw_window_handle::HasWindowHandle>(window: &T) -> Result<HWND, String> {
@@ -282,7 +261,6 @@ pub fn set_window_fixed_mode(
 ) -> Result<(), String> {
     // 旧命令现在只同步悬浮球入口状态，不再修改主窗口样式或锁定窗口。
     IS_FIXED_MODE.store(fixed, Ordering::SeqCst);
-    sync_tray_fixed_checked(fixed);
 
     Ok(())
 }
@@ -368,6 +346,7 @@ pub fn show_main_window(app_handle: AppHandle) -> Result<(), String> {
         .ok_or_else(|| "未找到主窗口".to_string())?;
 
     let _ = window.unminimize();
+    ensure_main_window_onscreen(&window)?;
 
     #[cfg(target_os = "windows")]
     {
@@ -395,7 +374,9 @@ pub fn toggle_main_window(app_handle: AppHandle) -> Result<bool, String> {
     #[cfg(not(target_os = "windows"))]
     let visible = window.is_visible().map_err(|e| e.to_string())?;
 
-    if visible {
+    let onscreen = is_window_usable_on_screen(&window).unwrap_or(false);
+
+    if visible && onscreen {
         #[cfg(target_os = "windows")]
         {
             hide_window_win32(&window)?;
@@ -409,6 +390,7 @@ pub fn toggle_main_window(app_handle: AppHandle) -> Result<bool, String> {
         Ok(false)
     } else {
         let _ = window.unminimize();
+        ensure_main_window_onscreen(&window)?;
 
         #[cfg(target_os = "windows")]
         {
@@ -423,6 +405,80 @@ pub fn toggle_main_window(app_handle: AppHandle) -> Result<bool, String> {
         let _ = window.set_focus();
         Ok(true)
     }
+}
+
+fn is_window_usable_on_screen(window: &WebviewWindow) -> Result<bool, String> {
+    let position = window.outer_position().map_err(|e| e.to_string())?;
+    let size = window.outer_size().map_err(|e| e.to_string())?;
+
+    if size.width < 320 || size.height < 400 {
+        return Ok(false);
+    }
+
+    let monitors = window.available_monitors().map_err(|e| e.to_string())?;
+    if monitors.is_empty() {
+        return Ok(true);
+    }
+
+    let left = position.x;
+    let top = position.y;
+    let right = position.x + size.width as i32;
+    let bottom = position.y + size.height as i32;
+
+    Ok(monitors.iter().any(|monitor| {
+        let monitor_left = monitor.position().x;
+        let monitor_top = monitor.position().y;
+        let monitor_right = monitor_left + monitor.size().width as i32;
+        let monitor_bottom = monitor_top + monitor.size().height as i32;
+
+        right > monitor_left && left < monitor_right && bottom > monitor_top && top < monitor_bottom
+    }))
+}
+
+fn ensure_main_window_onscreen(window: &WebviewWindow) -> Result<(), String> {
+    if is_window_usable_on_screen(window).unwrap_or(false) {
+        return Ok(());
+    }
+
+    let monitor = window
+        .current_monitor()
+        .map_err(|e| e.to_string())?
+        .or_else(|| window.primary_monitor().ok().flatten())
+        .or_else(|| {
+            window
+                .available_monitors()
+                .ok()
+                .and_then(|mut items| items.pop())
+        });
+
+    let default_width = 380.0;
+    let default_height = 600.0;
+    window
+        .set_size(tauri::Size::Logical(tauri::LogicalSize {
+            width: default_width,
+            height: default_height,
+        }))
+        .map_err(|e| e.to_string())?;
+
+    if let Some(monitor) = monitor {
+        let scale = monitor.scale_factor();
+        let width = (default_width * scale).round() as i32;
+        let height = (default_height * scale).round() as i32;
+        let x = monitor.position().x + (monitor.size().width as i32 - width) / 2;
+        let y = monitor.position().y + (monitor.size().height as i32 - height) / 2;
+
+        window
+            .set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }))
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn exit_app(app_handle: AppHandle) -> Result<(), String> {
+    app_handle.exit(0);
+    Ok(())
 }
 
 #[tauri::command]
@@ -467,11 +523,6 @@ pub fn get_window_persist_state(window: Window) -> Result<WindowPersistState, St
 /// 重置窗口位置和大小（用于 Tauri 命令）
 #[tauri::command]
 pub fn reset_window(window: Window) -> Result<(), String> {
-    reset_window_impl(&window)
-}
-
-/// 重置 WebviewWindow 位置和大小（用于托盘菜单）
-pub fn reset_webview_window(window: WebviewWindow) -> Result<(), String> {
     reset_window_impl(&window)
 }
 

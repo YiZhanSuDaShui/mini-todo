@@ -1,3 +1,4 @@
+use crate::commands::sync_cmd::mark_webdav_local_dirty;
 use crate::db::{
     load_reminder_times, normalize_reminder_times, replace_reminder_times_with_notified,
     subtask_from_row, todo_from_row, AppSettings, Database, ExportData, Todo, WindowPosition,
@@ -23,6 +24,82 @@ fn get_setting_bool(conn: &rusqlite::Connection, key: &str, default: bool) -> bo
         Ok(val == "true")
     })
     .unwrap_or(default)
+}
+
+fn now_db_time() -> String {
+    Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+fn get_or_create_sync_device_id(conn: &rusqlite::Connection) -> rusqlite::Result<String> {
+    if let Ok(device_id) = conn.query_row(
+        "SELECT value FROM settings WHERE key = 'webdav_device_id'",
+        [],
+        |row| row.get::<_, String>(0),
+    ) {
+        if !device_id.trim().is_empty() {
+            return Ok(device_id);
+        }
+    }
+
+    let device_id = format!("dev_{}", Local::now().timestamp_millis());
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value, updated_at)
+         VALUES ('webdav_device_id', ?1, datetime('now', 'localtime'))",
+        [&device_id],
+    )?;
+    Ok(device_id)
+}
+
+fn record_tombstone(
+    conn: &rusqlite::Connection,
+    entity: &str,
+    sync_id: &str,
+    deleted_at: &str,
+    device_id: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO sync_tombstones (entity, sync_id, deleted_at, deleted_by_device_id)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(entity, sync_id) DO UPDATE SET
+            deleted_at = excluded.deleted_at,
+            deleted_by_device_id = excluded.deleted_by_device_id",
+        (entity, sync_id, deleted_at, device_id),
+    )?;
+    Ok(())
+}
+
+fn record_existing_tombstones(
+    conn: &rusqlite::Connection,
+    deleted_at: &str,
+    device_id: &str,
+) -> rusqlite::Result<()> {
+    for (table, entity) in [
+        ("todo_reminders", "reminder"),
+        ("subtasks", "subtask"),
+        ("todos", "todo"),
+    ] {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT sync_id FROM {} WHERE sync_id IS NOT NULL AND sync_id <> ''",
+            table
+        ))?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            record_tombstone(conn, entity, &row?, deleted_at, device_id)?;
+        }
+    }
+    Ok(())
+}
+
+fn clear_sync_fingerprints(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM settings
+         WHERE key IN (
+            'webdav_incremental_manifest_fingerprint',
+            'webdav_archive_file_fingerprint'
+         )",
+        [],
+    )?;
+    Ok(())
 }
 
 fn read_app_settings(conn: &rusqlite::Connection) -> AppSettings {
@@ -158,6 +235,10 @@ pub fn import_data_raw(db: &Database, json_data: &str) -> Result<(), String> {
         serde_json::from_str(json_data).map_err(|e| format!("Invalid JSON format: {}", e))?;
 
     db.with_connection(|conn| {
+        let import_time = now_db_time();
+        let device_id = get_or_create_sync_device_id(conn)?;
+        record_existing_tombstones(conn, &import_time, &device_id)?;
+
         conn.execute("DELETE FROM todo_reminders", [])?;
         conn.execute("DELETE FROM subtasks", [])?;
         conn.execute("DELETE FROM todos", [])?;
@@ -180,11 +261,17 @@ pub fn import_data_raw(db: &Database, json_data: &str) -> Result<(), String> {
                     todo.start_time,
                     todo.end_time,
                     todo.created_at,
-                    todo.updated_at,
+                    &import_time,
                 ],
             )?;
 
             let new_todo_id = conn.last_insert_rowid();
+            let todo_sync_id = format!("todo:{}:{}", device_id, new_todo_id);
+            conn.execute(
+                "UPDATE todos SET sync_id = ?1 WHERE id = ?2",
+                params![&todo_sync_id, new_todo_id],
+            )?;
+
             let reminder_times = import_reminder_times(todo);
             replace_reminder_times_with_notified(
                 conn,
@@ -192,6 +279,18 @@ pub fn import_data_raw(db: &Database, json_data: &str) -> Result<(), String> {
                 &reminder_times,
                 todo.legacy_notified,
             )?;
+            let mut reminder_stmt =
+                conn.prepare("SELECT id FROM todo_reminders WHERE todo_id = ?1")?;
+            let reminder_ids = reminder_stmt
+                .query_map([new_todo_id], |row| row.get::<_, i64>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            for reminder_id in reminder_ids {
+                let reminder_sync_id = format!("reminder:{}:{}", device_id, reminder_id);
+                conn.execute(
+                    "UPDATE todo_reminders SET sync_id = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![&reminder_sync_id, &import_time, reminder_id],
+                )?;
+            }
 
             // 2. Import subtasks
             for subtask in &todo.subtasks {
@@ -202,14 +301,22 @@ pub fn import_data_raw(db: &Database, json_data: &str) -> Result<(), String> {
                     params![
                         new_todo_id, subtask.title, subtask.content,
                         sub_completed_i,
-                        subtask.sort_order, subtask.created_at, subtask.updated_at,
+                        subtask.sort_order, subtask.created_at, &import_time,
                     ],
+                )?;
+                let new_subtask_id = conn.last_insert_rowid();
+                let subtask_sync_id = format!("subtask:{}:{}", device_id, new_subtask_id);
+                conn.execute(
+                    "UPDATE subtasks SET sync_id = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![&subtask_sync_id, &import_time, new_subtask_id],
                 )?;
             }
         }
 
         // 3. Import settings
         write_app_settings(conn, &import.settings)?;
+        clear_sync_fingerprints(conn)?;
+        mark_webdav_local_dirty(conn)?;
 
         Ok(())
     })

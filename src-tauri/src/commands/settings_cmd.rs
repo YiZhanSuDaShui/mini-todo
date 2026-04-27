@@ -104,14 +104,18 @@ pub struct AiPlanResult {
     pub reason: Option<String>,
 }
 
-fn get_setting(conn: &rusqlite::Connection, key: &str) -> Option<String> {
+fn read_setting_value(conn: &rusqlite::Connection, key: &str) -> Option<String> {
     conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
         row.get(0)
     })
     .ok()
 }
 
-fn set_setting(conn: &rusqlite::Connection, key: &str, value: &str) -> rusqlite::Result<()> {
+fn write_setting_value(
+    conn: &rusqlite::Connection,
+    key: &str,
+    value: &str,
+) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?1, ?2, datetime('now', 'localtime'))",
         [key, value],
@@ -159,17 +163,17 @@ fn ai_endpoint(base_url: &str, path: &str) -> String {
 fn read_ai_settings(db: &Database) -> Result<AiSettings, String> {
     db.with_connection(|conn| {
         Ok(AiSettings {
-            base_url: get_setting(conn, "ai_base_url")
+            base_url: read_setting_value(conn, "ai_base_url")
                 .filter(|v| !v.trim().is_empty())
                 .unwrap_or_else(|| DEFAULT_AI_BASE_URL.to_string()),
-            api_key: get_setting(conn, "ai_api_key").unwrap_or_default(),
-            model: get_setting(conn, "ai_model")
+            api_key: read_setting_value(conn, "ai_api_key").unwrap_or_default(),
+            model: read_setting_value(conn, "ai_model")
                 .filter(|v| !v.trim().is_empty())
                 .unwrap_or_else(|| DEFAULT_AI_MODEL.to_string()),
-            thinking_enabled: get_setting(conn, "ai_thinking_enabled")
+            thinking_enabled: read_setting_value(conn, "ai_thinking_enabled")
                 .map(|v| v == "true")
                 .unwrap_or(false),
-            reasoning_effort: get_setting(conn, "ai_reasoning_effort")
+            reasoning_effort: read_setting_value(conn, "ai_reasoning_effort")
                 .map(|v| normalize_reasoning_effort(&v))
                 .unwrap_or_else(|| "high".to_string()),
         })
@@ -186,10 +190,10 @@ pub fn get_ai_settings(db: State<Database>) -> Result<AiSettings, String> {
 pub fn save_ai_settings(db: State<Database>, settings: AiSettings) -> Result<(), String> {
     let settings = normalize_ai_settings(settings);
     db.with_connection(|conn| {
-        set_setting(conn, "ai_base_url", &settings.base_url)?;
-        set_setting(conn, "ai_api_key", &settings.api_key)?;
-        set_setting(conn, "ai_model", &settings.model)?;
-        set_setting(
+        write_setting_value(conn, "ai_base_url", &settings.base_url)?;
+        write_setting_value(conn, "ai_api_key", &settings.api_key)?;
+        write_setting_value(conn, "ai_model", &settings.model)?;
+        write_setting_value(
             conn,
             "ai_thinking_enabled",
             if settings.thinking_enabled {
@@ -198,7 +202,7 @@ pub fn save_ai_settings(db: State<Database>, settings: AiSettings) -> Result<(),
                 "false"
             },
         )?;
-        set_setting(conn, "ai_reasoning_effort", &settings.reasoning_effort)?;
+        write_setting_value(conn, "ai_reasoning_effort", &settings.reasoning_effort)?;
         Ok(())
     })
     .map_err(|e| e.to_string())

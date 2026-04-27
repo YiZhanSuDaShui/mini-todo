@@ -80,6 +80,7 @@ export interface SyncSettings {
   autoSync: boolean
   syncInterval: number
   syncMode: 'archive' | 'incremental'
+  startupSync: boolean
   lastSyncAt: string | null
   deviceId: string
 }
@@ -89,8 +90,12 @@ export interface SyncData {
   version: string
   deviceId: string
   updatedAt: string
+  manifest: unknown
   todos: unknown[]
+  subtasks: unknown[]
+  reminders: unknown[]
   settings: unknown
+  tombstones: unknown[]
   images: string[]
 }
 
@@ -103,7 +108,13 @@ export interface SyncDownloadResult {
   hasConflict: boolean
 }
 
-// 本地 AI 设置：仅保存在本机，不参与导出和云同步
+export interface SyncRunResult {
+  status: string
+  syncedAt: string | null
+  message: string
+}
+
+// AI 设置仅保存在本机，不写入 WebDAV 同步数据
 export interface AiSettings {
   baseUrl: string
   apiKey: string

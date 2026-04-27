@@ -9,7 +9,7 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAppStore, APP_VERSION } from '@/stores'
-import type { AiSettings, AppNotificationPosition, ScreenConfig, SyncSettings, SyncDownloadResult } from '@/types'
+import type { AiSettings, AppNotificationPosition, ScreenConfig, SyncSettings, SyncDownloadResult, SyncRunResult } from '@/types'
 
 const appWindow = getCurrentWindow()
 const appStore = useAppStore()
@@ -234,6 +234,7 @@ async function handleImport() {
     }
     
     await emit('data-imported')
+    await emit('todo-local-changed')
     handleClose()
   } catch (e) {
     if (String(e) !== 'cancel') {
@@ -266,7 +267,8 @@ const syncSettings = reactive<SyncSettings>({
   webdavPassword: '',
   autoSync: false,
   syncInterval: 15,
-  syncMode: 'archive',
+  syncMode: 'incremental',
+  startupSync: false,
   lastSyncAt: null,
   deviceId: '',
 })
@@ -276,11 +278,13 @@ const syncing = ref(false)
 const syncStatus = ref<'idle' | 'uploading' | 'downloading'>('idle')
 
 const syncIntervalOptions = [
+  { label: '1 分钟', value: 1 },
+  { label: '90 秒', value: 90 },
+  { label: '2 分钟', value: 2 },
   { label: '5 分钟', value: 5 },
   { label: '10 分钟', value: 10 },
   { label: '15 分钟', value: 15 },
   { label: '30 分钟', value: 30 },
-  { label: '60 分钟', value: 60 },
 ]
 
 function handleSyncModeChange(mode: 'archive' | 'incremental') {
@@ -366,6 +370,10 @@ async function handleUploadSync() {
     syncing.value = true
     syncStatus.value = 'uploading'
     const lastSyncAt = await invoke<string>('webdav_upload_sync')
+    if (lastSyncAt === 'no_changes') {
+      ElMessage.info('暂无需要同步的变化')
+      return
+    }
     syncSettings.lastSyncAt = lastSyncAt
     ElMessage.success('数据已上传到云端')
     await emit('sync-completed')
@@ -385,6 +393,17 @@ async function handleDownloadSync() {
   try {
     syncing.value = true
     syncStatus.value = 'downloading'
+
+    if (syncSettings.syncMode === 'incremental') {
+      const result = await invoke<SyncRunResult>('webdav_sync_now')
+      if (result.syncedAt) {
+        syncSettings.lastSyncAt = result.syncedAt
+      }
+      ElMessage.success(result.message || '同步完成')
+      await emit('sync-completed')
+      return
+    }
+
     const result = await invoke<SyncDownloadResult>('webdav_download_sync')
 
     if (!result.hasRemote) {
@@ -434,6 +453,7 @@ async function applyRemoteData(result: SyncDownloadResult) {
     syncSettings.lastSyncAt = lastSyncAt
     ElMessage.success('已同步云端数据到本地')
     await emit('data-imported')
+    await emit('sync-completed')
   } catch (e) {
     ElMessage.error('应用远程数据失败: ' + String(e))
   }
@@ -785,11 +805,25 @@ async function handleCheckUpdate() {
               <el-icon class="row-icon"><Timer /></el-icon>
               <div class="row-content">
                 <span class="settings-label">自动同步</span>
-                <span class="settings-desc">定时自动将数据同步到云端</span>
+                <span class="settings-desc">定时同步，并在保存后防抖上传</span>
               </div>
             </div>
             <el-switch
               v-model="syncSettings.autoSync"
+              @change="saveSyncSettings"
+            />
+          </div>
+
+          <div class="settings-row">
+            <div class="row-left">
+              <el-icon class="row-icon"><Refresh /></el-icon>
+              <div class="row-content">
+                <span class="settings-label">启动时同步</span>
+                <span class="settings-desc">打开软件后立即合并一次云端数据</span>
+              </div>
+            </div>
+            <el-switch
+              v-model="syncSettings.startupSync"
               @change="saveSyncSettings"
             />
           </div>
@@ -855,14 +889,14 @@ async function handleCheckUpdate() {
                 @click="handleSyncModeChange('incremental')"
               >
                 <span class="sync-mode-title">增量模式</span>
-                <span class="sync-mode-desc">预留少量 JSON 文件同步，功能稍后接入</span>
+                <span class="sync-mode-desc">拆分 manifest、todos、subtasks 等少量 JSON 文件</span>
               </button>
             </div>
           </div>
 
           <p class="card-hint">
             <el-icon :size="14"><InfoFilled /></el-icon>
-            通过 WebDAV 协议将待办数据和图片同步到云端存储
+            通过 WebDAV 协议同步待办、子任务、提醒和图片；AI 配置、窗口与屏幕配置只保存在本机
           </p>
         </div>
       </div>
@@ -982,7 +1016,7 @@ async function handleCheckUpdate() {
 
           <p class="card-hint">
             <el-icon :size="14"><InfoFilled /></el-icon>
-            AI 配置只保存在本机，用于待办编辑页的 Agent 时间规划，不会随 WebDAV 同步上传
+            AI Base URL、API Key、模型与思考参数均只保存在本机，不会写入 WebDAV
           </p>
         </div>
       </div>

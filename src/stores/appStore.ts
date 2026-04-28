@@ -15,7 +15,6 @@ export const APP_VERSION = ref<string>(APP_VERSION_FALLBACK)
 const GITHUB_OWNER = 'YiZhanSuDaShui'
 const GITHUB_REPO = 'mini-todo'
 const GITHUB_RELEASES_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases`
-const GITHUB_LATEST_RELEASE_API = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`
 const FLOATING_BUBBLE_LABEL = 'fixed-bubble'
 const FLOATING_BUBBLE_SIZE = 48
 const FLOATING_BUBBLE_MARGIN = 30
@@ -40,6 +39,23 @@ interface AppSettingsSnapshot {
 interface FloatingBubbleStatePayload {
   enabled: boolean
   source: string
+}
+
+interface UpdateAsset {
+  name: string
+  downloadUrl: string
+}
+
+interface LatestReleaseInfo {
+  tagName: string
+  releaseUrl: string
+  installerAsset: UpdateAsset | null
+}
+
+interface UpdateDownloadResult {
+  filePath: string
+  fileName: string
+  bytes: number
 }
 
 export const useAppStore = defineStore('app', () => {
@@ -79,6 +95,8 @@ export const useAppStore = defineStore('app', () => {
   const hasUpdate = ref(false)
   const latestVersion = ref<string | null>(null)
   const releaseUrl = ref<string | null>(null)
+  const updateInstallerAsset = ref<UpdateAsset | null>(null)
+  const updateCheckError = ref<string | null>(null)
 
   // 获取当前窗口
   const appWindow = getCurrentWindow()
@@ -771,6 +789,8 @@ export const useAppStore = defineStore('app', () => {
       hasUpdate.value = false
       latestVersion.value = null
       releaseUrl.value = null
+      updateInstallerAsset.value = null
+      updateCheckError.value = null
 
       await loadAppVersion()
       if (!APP_VERSION.value) {
@@ -778,30 +798,20 @@ export const useAppStore = defineStore('app', () => {
         return false
       }
 
-      const response = await fetch(GITHUB_LATEST_RELEASE_API, {
-        headers: {
-          'Accept': 'application/vnd.github.v3+json'
-        }
-      })
-      
-      if (!response.ok) {
-        console.log(`No releases found or API error: ${response.status}`)
-        return false
-      }
-      
-      const release = await response.json()
-      const tagName = release.tag_name as string
-      const releasePageUrl = release.html_url as string | undefined
+      const release = await invoke<LatestReleaseInfo>('get_latest_release_info')
+      const tagName = release.tagName
       
       // 比较版本号
       if (compareVersions(tagName, APP_VERSION.value) > 0) {
         hasUpdate.value = true
         latestVersion.value = tagName
-        releaseUrl.value = releasePageUrl || GITHUB_RELEASES_URL
+        releaseUrl.value = release.releaseUrl || GITHUB_RELEASES_URL
+        updateInstallerAsset.value = release.installerAsset
       }
       return true
     } catch (e) {
       console.error('Failed to check for updates:', e)
+      updateCheckError.value = String(e)
       return false
     }
   }
@@ -809,6 +819,26 @@ export const useAppStore = defineStore('app', () => {
   // 获取 GitHub Release 页面 URL
   function getReleasesUrl(): string {
     return releaseUrl.value || GITHUB_RELEASES_URL
+  }
+
+  function getUpdateInstallerAsset(): UpdateAsset | null {
+    return updateInstallerAsset.value
+  }
+
+  async function downloadUpdateInstaller(): Promise<UpdateDownloadResult> {
+    const asset = updateInstallerAsset.value
+    if (!asset) {
+      throw new Error('当前平台没有可自动安装的更新包')
+    }
+
+    return await invoke<UpdateDownloadResult>('download_update_installer', {
+      downloadUrl: asset.downloadUrl,
+      fileName: asset.name
+    })
+  }
+
+  async function installUpdateAndExit(installerPath: string) {
+    await invoke('install_update_and_exit', { installerPath })
   }
 
   return {
@@ -820,6 +850,7 @@ export const useAppStore = defineStore('app', () => {
     windowMode,
     hasUpdate,
     latestVersion,
+    updateCheckError,
     // 屏幕配置状态
     currentScreenConfigId,
     screenConfigs,
@@ -839,6 +870,9 @@ export const useAppStore = defineStore('app', () => {
     importData,
     checkForUpdates,
     getReleasesUrl,
+    getUpdateInstallerAsset,
+    downloadUpdateInstaller,
+    installUpdateAndExit,
     // 屏幕配置方法
     generateScreenConfigId,
     generateScreenConfigDisplayName,

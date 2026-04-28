@@ -14,12 +14,13 @@ use tauri::Manager;
 
 use commands::{
     clear_floating_bubble_topmost, close_all_notification_windows, close_notification_window,
-    create_subtask, create_todo, delete_screen_config, delete_subtask, delete_todo, exit_app,
-    export_data, export_data_to_file, fetch_holidays, get_ai_settings,
-    get_app_notification_position, get_auto_hide_enabled, get_images_dir, get_notification_type,
-    get_screen_config, get_settings, get_show_calendar, get_subtask, get_sync_settings, get_todos,
-    get_window_persist_state, hide_main_window, import_data, import_data_from_file,
-    import_subtasks_from_paths, list_ai_models, list_screen_configs, plan_todo_with_ai,
+    create_subtask, create_todo, delete_screen_config, delete_subtask, delete_todo,
+    download_update_installer, exit_app, export_data, export_data_to_file, fetch_holidays,
+    get_ai_settings, get_app_notification_position, get_auto_hide_enabled, get_images_dir,
+    get_latest_release_info, get_notification_type, get_screen_config, get_settings,
+    get_show_calendar, get_subtask, get_sync_settings, get_todos, get_window_persist_state,
+    hide_main_window, import_data, import_data_from_file, import_subtasks_from_paths,
+    install_update_and_exit, list_ai_models, list_screen_configs, plan_todo_with_ai,
     reinforce_floating_bubble_topmost, reorder_todos, reset_window, save_ai_settings,
     save_screen_config, save_settings, save_subtask_image, save_sync_settings,
     set_app_notification_position, set_auto_hide_cursor_inside, set_auto_hide_enabled,
@@ -200,6 +201,10 @@ pub fn run() {
             save_ai_settings,
             list_ai_models,
             plan_todo_with_ai,
+            // 应用更新命令
+            get_latest_release_info,
+            download_update_installer,
+            install_update_and_exit,
             // 通知窗口命令
             close_notification_window,
             close_all_notification_windows,

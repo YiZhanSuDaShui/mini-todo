@@ -17,6 +17,7 @@ const appStore = useAppStore()
 const exporting = ref(false)
 const importing = ref(false)
 const checking = ref(false)
+const installingUpdate = ref(false)
 const autoStart = ref(false)
 const autoStartLoading = ref(false)
 
@@ -553,21 +554,58 @@ async function handleCheckUpdate() {
     checking.value = true
     const checked = await appStore.checkForUpdates()
     if (!checked) {
-      ElMessage.info('未能获取更新信息，请确认你的仓库已发布 Release')
-      return
-    }
-    
-    if (hasUpdate.value) {
       await ElMessageBox.confirm(
-        `发现新版本 ${latestVersion.value}，是否前往下载？`,
-        '版本更新',
+        '未能获取更新信息，可能是网络异常或 GitHub 暂时不可用。是否打开 Release 页面手动查看？',
+        '检查更新',
         {
-          confirmButtonText: '前往下载',
-          cancelButtonText: '稍后再说',
+          confirmButtonText: '打开 Release',
+          cancelButtonText: '稍后再试',
           type: 'info'
         }
       )
       await openUrl(appStore.getReleasesUrl())
+      return
+    }
+    
+    if (hasUpdate.value) {
+      const installerAsset = appStore.getUpdateInstallerAsset()
+      if (!installerAsset) {
+        await ElMessageBox.confirm(
+          `发现新版本 ${latestVersion.value}，当前平台暂不支持应用内安装，是否前往下载？`,
+          '版本更新',
+          {
+            confirmButtonText: '前往下载',
+            cancelButtonText: '稍后再说',
+            type: 'info'
+          }
+        )
+        await openUrl(appStore.getReleasesUrl())
+        return
+      }
+
+      await ElMessageBox.confirm(
+        `发现新版本 ${latestVersion.value}，是否下载并安装？`,
+        '版本更新',
+        {
+          confirmButtonText: '下载并安装',
+          cancelButtonText: '稍后再说',
+          type: 'info'
+        }
+      )
+
+      installingUpdate.value = true
+      ElMessage.info('正在下载安装包，请稍候...')
+      const result = await appStore.downloadUpdateInstaller()
+      await ElMessageBox.confirm(
+        `安装包已下载：${result.fileName}。现在将退出 Mini Todo 并启动安装程序，是否继续？`,
+        '准备安装',
+        {
+          confirmButtonText: '退出并安装',
+          cancelButtonText: '稍后手动安装',
+          type: 'warning'
+        }
+      )
+      await appStore.installUpdateAndExit(result.filePath)
     } else {
       ElMessage.success('当前已是最新版本')
     }
@@ -577,6 +615,7 @@ async function handleCheckUpdate() {
     }
   } finally {
     checking.value = false
+    installingUpdate.value = false
   }
 }
 </script>
@@ -1097,11 +1136,11 @@ async function handleCheckUpdate() {
         
         <button 
           class="check-update-btn"
-          :disabled="checking"
+          :disabled="checking || installingUpdate"
           @click="handleCheckUpdate"
         >
           <el-icon><Refresh /></el-icon>
-          <span>{{ checking ? '检查中...' : '检查更新' }}</span>
+          <span>{{ installingUpdate ? '下载中...' : checking ? '检查中...' : '检查更新' }}</span>
         </button>
       </div>
     </div>

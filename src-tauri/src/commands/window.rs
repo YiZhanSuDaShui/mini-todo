@@ -2,19 +2,34 @@ use crate::db::{
     AppSettings, Database, SaveScreenConfigRequest, ScreenConfig, WindowPosition, WindowSize,
 };
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use tauri::{AppHandle, Manager, State, WebviewWindow, Window};
 
 #[cfg(target_os = "windows")]
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HMODULE, HWND, RECT};
+#[cfg(target_os = "windows")]
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+};
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetAncestor, IsWindowVisible, SetWindowPos, ShowWindow, GA_ROOT, HWND_TOPMOST, SWP_NOACTIVATE,
-    SWP_NOMOVE, SW_HIDE, SW_SHOWNORMAL,
+    DispatchMessageW, GetAncestor, GetForegroundWindow, GetMessageW, GetShellWindow,
+    GetWindowLongPtrW, GetWindowRect, IsWindow, IsWindowVisible, SetWindowLongPtrW, SetWindowPos,
+    ShowWindow, TranslateMessage, EVENT_SYSTEM_FOREGROUND, GA_ROOT, GWL_EXSTYLE, GWL_STYLE,
+    HWND_NOTOPMOST, HWND_TOPMOST, MSG, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, WINEVENT_OUTOFCONTEXT, WS_CAPTION,
+    WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_THICKFRAME,
 };
 
 /// 全局悬浮球入口状态（沿用旧命名以兼容历史调用）
 pub static IS_FIXED_MODE: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "windows")]
+static FLOATING_BUBBLE_HWND: AtomicIsize = AtomicIsize::new(0);
+#[cfg(target_os = "windows")]
+static FLOATING_BUBBLE_HOOK_STARTED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(target_os = "windows")]
 fn hwnd_from_window<T: raw_window_handle::HasWindowHandle>(window: &T) -> Result<HWND, String> {
@@ -77,6 +92,195 @@ fn set_window_size_win32<T: raw_window_handle::HasWindowHandle>(
         )
         .map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn set_floating_bubble_tool_window(hwnd: HWND) {
+    unsafe {
+        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        let next_ex_style =
+            (ex_style | WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0) & !WS_EX_APPWINDOW.0;
+        let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next_ex_style as isize);
+        let _ = SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn is_same_hwnd(left: HWND, right: HWND) -> bool {
+    left.0 == right.0
+}
+
+#[cfg(target_os = "windows")]
+fn rect_covers_monitor(rect: RECT, monitor: RECT) -> bool {
+    const TOLERANCE: i32 = 2;
+    rect.left <= monitor.left + TOLERANCE
+        && rect.top <= monitor.top + TOLERANCE
+        && rect.right >= monitor.right - TOLERANCE
+        && rect.bottom >= monitor.bottom - TOLERANCE
+}
+
+#[cfg(target_os = "windows")]
+fn foreground_is_fullscreen(foreground: HWND, bubble: HWND) -> bool {
+    if foreground.0.is_null() || is_same_hwnd(foreground, bubble) {
+        return false;
+    }
+
+    unsafe {
+        let shell = GetShellWindow();
+        if !shell.0.is_null() && is_same_hwnd(foreground, shell) {
+            return false;
+        }
+
+        if !IsWindowVisible(foreground).as_bool() {
+            return false;
+        }
+
+        let style = GetWindowLongPtrW(foreground, GWL_STYLE) as u32;
+        let looks_like_regular_window =
+            (style & WS_CAPTION.0) != 0 && (style & WS_THICKFRAME.0) != 0;
+
+        let mut rect = RECT::default();
+        if GetWindowRect(foreground, &mut rect).is_err() {
+            return false;
+        }
+
+        let monitor = MonitorFromWindow(foreground, MONITOR_DEFAULTTONEAREST);
+        if monitor.0.is_null() {
+            return false;
+        }
+
+        let mut monitor_info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            rcMonitor: RECT::default(),
+            rcWork: RECT::default(),
+            dwFlags: 0,
+        };
+
+        if !GetMonitorInfoW(monitor, &mut monitor_info).as_bool() {
+            return false;
+        }
+
+        rect_covers_monitor(rect, monitor_info.rcMonitor) && !looks_like_regular_window
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn apply_floating_bubble_topmost(show_when_allowed: bool) {
+    let raw = FLOATING_BUBBLE_HWND.load(Ordering::SeqCst);
+    if raw == 0 {
+        return;
+    }
+
+    let bubble = HWND(raw as *mut _);
+
+    unsafe {
+        if !IsWindow(bubble).as_bool() {
+            FLOATING_BUBBLE_HWND.store(0, Ordering::SeqCst);
+            return;
+        }
+
+        let foreground = GetForegroundWindow();
+        if foreground_is_fullscreen(foreground, bubble) {
+            let _ = ShowWindow(bubble, SW_HIDE);
+            let _ = SetWindowPos(
+                bubble,
+                HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+            return;
+        }
+
+        if show_when_allowed {
+            let _ = ShowWindow(bubble, SW_SHOWNOACTIVATE);
+        }
+
+        let _ = SetWindowPos(
+            bubble,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn floating_bubble_foreground_event(
+    _hook: HWINEVENTHOOK,
+    _event: u32,
+    _hwnd: HWND,
+    _id_object: i32,
+    _id_child: i32,
+    _event_thread: u32,
+    _event_time: u32,
+) {
+    apply_floating_bubble_topmost(true);
+}
+
+#[cfg(target_os = "windows")]
+fn ensure_floating_bubble_foreground_hook() {
+    if FLOATING_BUBBLE_HOOK_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    let spawn_result = std::thread::Builder::new()
+        .name("mini-todo-floating-bubble-topmost".to_string())
+        .spawn(|| unsafe {
+            let hook = SetWinEventHook(
+                EVENT_SYSTEM_FOREGROUND,
+                EVENT_SYSTEM_FOREGROUND,
+                HMODULE::default(),
+                Some(floating_bubble_foreground_event),
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT,
+            );
+
+            if hook.0.is_null() {
+                FLOATING_BUBBLE_HOOK_STARTED.store(false, Ordering::SeqCst);
+                return;
+            }
+
+            let mut message = MSG::default();
+            while GetMessageW(&mut message, HWND::default(), 0, 0).as_bool() {
+                let _ = TranslateMessage(&message);
+                let _ = DispatchMessageW(&message);
+            }
+
+            let _ = UnhookWinEvent(hook);
+            FLOATING_BUBBLE_HOOK_STARTED.store(false, Ordering::SeqCst);
+        });
+
+    if spawn_result.is_err() {
+        FLOATING_BUBBLE_HOOK_STARTED.store(false, Ordering::SeqCst);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn reinforce_floating_bubble_topmost_win32(
+    window: &WebviewWindow,
+    show_when_allowed: bool,
+) -> Result<(), String> {
+    let hwnd = hwnd_from_window(window)?;
+    set_floating_bubble_tool_window(hwnd);
+    FLOATING_BUBBLE_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+    ensure_floating_bubble_foreground_hook();
+    apply_floating_bubble_topmost(show_when_allowed);
     Ok(())
 }
 
@@ -261,6 +465,10 @@ pub fn set_window_fixed_mode(
 ) -> Result<(), String> {
     // 旧命令现在只同步悬浮球入口状态，不再修改主窗口样式或锁定窗口。
     IS_FIXED_MODE.store(fixed, Ordering::SeqCst);
+    #[cfg(target_os = "windows")]
+    if !fixed {
+        FLOATING_BUBBLE_HWND.store(0, Ordering::SeqCst);
+    }
 
     Ok(())
 }
@@ -315,6 +523,37 @@ pub fn set_window_exact_size_by_label(
                 height: height.max(1) as u32,
             }))
             .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn reinforce_floating_bubble_topmost(app_handle: AppHandle) -> Result<(), String> {
+    let window = app_handle
+        .get_webview_window("fixed-bubble")
+        .ok_or_else(|| "未找到悬浮球窗口".to_string())?;
+
+    #[cfg(target_os = "windows")]
+    {
+        reinforce_floating_bubble_topmost_win32(&window, true)?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        window.set_always_on_top(true).map_err(|e| e.to_string())?;
+        window.set_skip_taskbar(true).map_err(|e| e.to_string())?;
+        let _ = window.show();
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_floating_bubble_topmost() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        FLOATING_BUBBLE_HWND.store(0, Ordering::SeqCst);
     }
 
     Ok(())

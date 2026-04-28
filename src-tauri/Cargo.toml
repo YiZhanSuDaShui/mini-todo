@@ -1,6 +1,6 @@
 [package]
 name = "mini-todo"
-version = "1.6.6"
+version = "1.6.7"
 description = "A minimal todo desktop app with Windows pinning support"
 authors = ["you"]
 edition = "2021"
@@ -44,7 +44,7 @@ cron = "0.15.0"
 notify = "7"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_Shell", "Win32_System_LibraryLoader"] }
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_Shell", "Win32_System_LibraryLoader"] }
 winreg = "0.55"
 raw-window-handle = "0.6"
 

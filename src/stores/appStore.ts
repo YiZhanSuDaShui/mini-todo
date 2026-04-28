@@ -176,6 +176,12 @@ export const useAppStore = defineStore('app', () => {
     })
   }
 
+  async function reinforceFloatingBubbleTopmost() {
+    await invoke('reinforce_floating_bubble_topmost').catch((e) => {
+      console.warn('Failed to reinforce floating bubble topmost state:', e)
+    })
+  }
+
   function bindFloatingBubbleDestroyed(bubble: WebviewWindow) {
     if (floatingBubbleDestroyBound) return
     floatingBubbleDestroyBound = true
@@ -201,6 +207,7 @@ export const useAppStore = defineStore('app', () => {
     await bubble.setAlwaysOnTop(true).catch(() => undefined)
     await bubble.setSkipTaskbar(true).catch(() => undefined)
     await bubble.show().catch(() => undefined)
+    await reinforceFloatingBubbleTopmost()
 
     while (Date.now() - startedAt < timeoutMs) {
       try {
@@ -208,6 +215,7 @@ export const useAppStore = defineStore('app', () => {
         const target = current || bubble
 
         if (await target.isVisible().catch(() => false)) {
+          await reinforceFloatingBubbleTopmost()
           return true
         }
       } catch (e) {
@@ -244,6 +252,7 @@ export const useAppStore = defineStore('app', () => {
         await existing.setSkipTaskbar(true).catch(() => undefined)
         await existing.show().catch(() => undefined)
         await correctFloatingBubbleSize(existing)
+        await reinforceFloatingBubbleTopmost()
         return existing.isVisible().catch(() => true)
       }
 
@@ -266,7 +275,7 @@ export const useAppStore = defineStore('app', () => {
         skipTaskbar: true,
         shadow: false,
         focus: false,
-        focusable: true,
+        focusable: false,
         visible: true
       })
 
@@ -280,6 +289,7 @@ export const useAppStore = defineStore('app', () => {
       const visible = await waitForFloatingBubbleVisible(bubble)
       if (visible && !failed) {
         await correctFloatingBubbleSize(bubble)
+        await reinforceFloatingBubbleTopmost()
       }
       return visible && !failed
     } catch (e) {
@@ -293,6 +303,7 @@ export const useAppStore = defineStore('app', () => {
       const bubble = await WebviewWindow.getByLabel(FLOATING_BUBBLE_LABEL)
       if (bubble) {
         closingFloatingBubbleInternally = true
+        await invoke('clear_floating_bubble_topmost').catch(() => undefined)
         await bubble.close()
         window.setTimeout(() => {
           closingFloatingBubbleInternally = false

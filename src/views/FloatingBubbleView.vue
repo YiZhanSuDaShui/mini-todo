@@ -105,6 +105,14 @@ function reportPositionError(message: string, error: unknown) {
   console.error(message, error)
 }
 
+async function reinforceTopmost() {
+  await bubbleWindow.setAlwaysOnTop(true).catch(() => undefined)
+  await bubbleWindow.setSkipTaskbar(true).catch(() => undefined)
+  await invoke('reinforce_floating_bubble_topmost').catch((e) => {
+    console.warn('强化悬浮球置顶失败:', e)
+  })
+}
+
 function flushWindowPosition() {
   if (windowMoveInFlight || !pendingWindowPosition) return
 
@@ -179,6 +187,7 @@ function animateWindowPosition(
     window.setTimeout(() => {
       snapping = false
       snappingActive.value = false
+      void reinforceTopmost()
     }, 80)
   }
 
@@ -250,6 +259,7 @@ async function toggleMainWindow() {
 
   try {
     mainWindowShownByBubble = await invoke<boolean>('toggle_main_window')
+    void reinforceTopmost()
     return
   } catch (e) {
     console.warn('后端切换主窗口命令不可用，使用前端兜底:', e)
@@ -263,6 +273,7 @@ async function toggleMainWindow() {
 
   await invoke('show_main_window')
   mainWindowShownByBubble = true
+  void reinforceTopmost()
 }
 
 function handlePointerDown(event: PointerEvent) {
@@ -386,6 +397,7 @@ async function handlePointerUp(event: PointerEvent) {
 
   if (wasDragging) {
     scheduleSnap()
+    void reinforceTopmost()
     return
   }
 
@@ -421,8 +433,7 @@ onMounted(async () => {
     scheduleSnap()
   })
 
-  await bubbleWindow.setAlwaysOnTop(true)
-  await bubbleWindow.setSkipTaskbar(true)
+  await reinforceTopmost()
   const scale = await bubbleWindow.scaleFactor().catch(() => 1)
   const physicalSize = Math.round(BALL_SIZE * scale)
   await invoke('set_window_exact_size_by_label', {
@@ -432,6 +443,7 @@ onMounted(async () => {
   }).catch((e) => {
     console.error('按标签校正悬浮球窗口尺寸失败:', e)
   })
+  await reinforceTopmost()
 })
 
 onUnmounted(() => {

@@ -2,6 +2,7 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { availableMonitors, cursorPosition, getCurrentWindow, PhysicalPosition } from '@tauri-apps/api/window'
+import miniTodoLogo from '@/assets/minitodo-logo.png'
 
 const bubbleWindow = getCurrentWindow()
 
@@ -10,6 +11,7 @@ const BALL_SIZE = 48
 const DRAG_THRESHOLD = 5
 const SNAP_DELAY_MS = 40
 const SNAP_ANIMATION_MS = 320
+const CLICK_SUPPRESS_AFTER_DRAG_MS = 450
 
 let unlistenMoved: (() => void) | null = null
 let snapTimer: number | null = null
@@ -34,6 +36,8 @@ let latestDragCursorX = 0
 let latestDragCursorY = 0
 let mainWindowShownByBubble = false
 let lastToggleAt = 0
+let movedBeyondClickThreshold = false
+let suppressClickUntil = 0
 let dragStart: {
   offsetX: number
   offsetY: number
@@ -145,6 +149,7 @@ function resetDragState() {
   isMouseDown = false
   isDragging = false
   isPreparingDrag = false
+  movedBeyondClickThreshold = false
   dragStart = null
   releasePointerCapture()
   cancelDragMoveFrame()
@@ -288,6 +293,7 @@ function handlePointerDown(event: PointerEvent) {
   isMouseDown = true
   isDragging = false
   isPreparingDrag = false
+  movedBeyondClickThreshold = false
   dragStart = null
   dragStartScreenX = event.screenX
   dragStartScreenY = event.screenY
@@ -370,6 +376,7 @@ function handlePointerMove(event: PointerEvent) {
   const deltaY = event.screenY - dragStartScreenY
 
   if (!isDragging && Math.hypot(deltaX, deltaY) < DRAG_THRESHOLD) return
+  movedBeyondClickThreshold = true
 
   const sessionId = dragSessionId
   if (!dragStart) {
@@ -392,10 +399,11 @@ async function handlePointerUp(event: PointerEvent) {
   if (!isMouseDown) return
   if (activePointerId !== null && event.pointerId !== activePointerId) return
 
-  const wasDragging = isDragging
+  const shouldTreatAsDrag = isDragging || isPreparingDrag || movedBeyondClickThreshold
   resetDragState()
 
-  if (wasDragging) {
+  if (shouldTreatAsDrag) {
+    suppressClickUntil = performance.now() + CLICK_SUPPRESS_AFTER_DRAG_MS
     scheduleSnap()
     void reinforceTopmost()
     return
@@ -408,6 +416,7 @@ async function handleBubbleClick(event: MouseEvent) {
   event.preventDefault()
   event.stopPropagation()
 
+  if (performance.now() < suppressClickUntil) return
   if (isDragging || dragging.value) return
   await toggleMainWindow()
 }
@@ -470,7 +479,7 @@ onUnmounted(() => {
     @click="handleBubbleClick"
   >
     <div class="floating-ball-inner">
-      <span class="floating-ball-letter">Z</span>
+      <img class="floating-ball-logo" :src="miniTodoLogo" alt="Mini Todo" draggable="false">
     </div>
   </div>
 </template>
@@ -490,6 +499,10 @@ onUnmounted(() => {
 }
 
 .floating-ball {
+  --logo-mask-size: 48px;
+  --logo-center-x-adjust: -0.1px;
+  --logo-center-y-adjust: 0.1px;
+
   width: 48px;
   height: 48px;
   border-radius: 50%;
@@ -501,88 +514,54 @@ onUnmounted(() => {
   transform: translateZ(0);
   touch-action: none;
   -webkit-app-region: no-drag;
+  isolation: isolate;
 }
 
-.floating-ball::before {
+.floating-ball::after {
   content: '';
   position: absolute;
-  inset: 0;
+  left: 50%;
+  top: 50%;
+  width: var(--logo-mask-size);
+  height: var(--logo-mask-size);
   border-radius: 50%;
-  padding: 3px;
-  background: conic-gradient(
-    from 0deg,
-    #f43f5e,
-    #ec4899,
-    #a855f7,
-    #6366f1,
-    #3b82f6,
-    #06b6d4,
-    #10b981,
-    #eab308,
-    #f97316,
-    #f43f5e
-  );
-  -webkit-mask:
-    linear-gradient(#fff 0 0) content-box,
-    linear-gradient(#fff 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  transition: transform 0.15s ease;
-  animation: none;
-  will-change: transform;
-}
-
-.floating-ball:hover::before {
-  animation: border-spin 2s linear infinite;
-}
-
-@keyframes border-spin {
-  from {
-    transform: rotate(0deg);
-  }
-
-  to {
-    transform: rotate(360deg);
-  }
+  background: rgba(15, 23, 42, 0.22);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease;
+  transform: translate(-50%, -50%)
+    translate(var(--logo-center-x-adjust), var(--logo-center-y-adjust));
+  z-index: 2;
 }
 
 .floating-ball-inner {
   position: absolute;
-  inset: 3px;
+  inset: 0;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
   transform: translateZ(0);
   will-change: transform;
+  z-index: 1;
 }
 
-.floating-ball-letter {
-  font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  font-size: 28px;
-  font-weight: 700;
-  line-height: 1;
+.floating-ball-logo {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  user-select: none;
+  -webkit-user-drag: none;
   pointer-events: none;
-  background: conic-gradient(
-    from 0deg,
-    #f43f5e,
-    #ec4899,
-    #a855f7,
-    #6366f1,
-    #3b82f6,
-    #06b6d4,
-    #10b981,
-    #eab308,
-    #f97316,
-    #f43f5e
-  );
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  backface-visibility: hidden;
+  transform: translateZ(0);
+}
+
+.floating-ball:hover::after {
+  opacity: 1;
 }
 
 .floating-ball.pressing {
@@ -595,16 +574,8 @@ onUnmounted(() => {
   transition: none;
 }
 
-.floating-ball.dragging::before {
-  animation: border-spin 2s linear infinite;
-}
-
 .floating-ball.snapping .floating-ball-inner {
   animation: snap-pop 360ms cubic-bezier(0.18, 1.35, 0.32, 1);
-}
-
-.floating-ball.snapping::before {
-  animation: border-spin 1.2s linear infinite;
 }
 
 @keyframes snap-pop {

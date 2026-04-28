@@ -15,7 +15,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetAncestor, GetForegroundWindow, GetMessageW, GetShellWindow,
+    DispatchMessageW, GetAncestor, GetClassNameW, GetForegroundWindow, GetMessageW, GetShellWindow,
     GetWindowLongPtrW, GetWindowRect, IsWindow, IsWindowVisible, SetWindowLongPtrW, SetWindowPos,
     ShowWindow, TranslateMessage, EVENT_SYSTEM_FOREGROUND, GA_ROOT, GWL_EXSTYLE, GWL_STYLE,
     HWND_NOTOPMOST, HWND_TOPMOST, MSG, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
@@ -129,6 +129,25 @@ fn rect_covers_monitor(rect: RECT, monitor: RECT) -> bool {
 }
 
 #[cfg(target_os = "windows")]
+fn window_class_name(hwnd: HWND) -> String {
+    let mut buffer = [0u16; 256];
+    let len = unsafe { GetClassNameW(hwnd, &mut buffer) };
+    if len <= 0 {
+        return String::new();
+    }
+
+    String::from_utf16_lossy(&buffer[..len as usize])
+}
+
+#[cfg(target_os = "windows")]
+fn is_desktop_or_shell_window(hwnd: HWND) -> bool {
+    matches!(
+        window_class_name(hwnd).as_str(),
+        "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
+    )
+}
+
+#[cfg(target_os = "windows")]
 fn foreground_is_fullscreen(foreground: HWND, bubble: HWND) -> bool {
     if foreground.0.is_null() || is_same_hwnd(foreground, bubble) {
         return false;
@@ -137,6 +156,10 @@ fn foreground_is_fullscreen(foreground: HWND, bubble: HWND) -> bool {
     unsafe {
         let shell = GetShellWindow();
         if !shell.0.is_null() && is_same_hwnd(foreground, shell) {
+            return false;
+        }
+
+        if is_desktop_or_shell_window(foreground) {
             return false;
         }
 

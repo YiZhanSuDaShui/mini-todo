@@ -127,7 +127,8 @@ async function handleVersionClick() {
           text
           size="small"
           class="nav-btn"
-          @click="emit('calendar-prev')"
+          @mousedown.stop
+          @click.stop="emit('calendar-prev')"
         >
           <el-icon><ArrowLeft /></el-icon>
         </el-button>
@@ -136,7 +137,8 @@ async function handleVersionClick() {
           text
           size="small"
           class="nav-btn"
-          @click="emit('calendar-next')"
+          @mousedown.stop
+          @click.stop="emit('calendar-next')"
         >
           <el-icon><ArrowRight /></el-icon>
         </el-button>
@@ -144,7 +146,8 @@ async function handleVersionClick() {
       <el-button
         size="small"
         class="today-btn"
-        @click="emit('calendar-today')"
+        @mousedown.stop
+        @click.stop="emit('calendar-today')"
       >
         今天
       </el-button>

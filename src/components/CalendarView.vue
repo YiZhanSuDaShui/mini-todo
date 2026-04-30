@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import type { Todo } from '@/types'
 import { getLunarDisplayText } from '@/utils/lunar'
 import { getYearHolidays, type HolidayInfo } from '@/utils/holiday'
@@ -19,6 +19,14 @@ const currentMonth = ref(new Date().getMonth()) // 0-11
 
 // 当前悬停的 todo ID（用于跨行联动 hover）
 const hoveredTodoId = ref<number | null>(null)
+const hoveredCalendarRow = ref<number | null>(null)
+const focusedCalendarRow = ref<number | null>(null)
+const calendarGridRef = ref<HTMLElement | null>(null)
+let focusTimer: ReturnType<typeof setTimeout> | null = null
+
+const FOCUS_TIMEOUT_MS = 15000
+const FOCUS_AREA_TOP_PERCENT = 100 / 6
+const FOCUS_AREA_HEIGHT_PERCENT = 100 * 4 / 6
 
 // 星期标题
 const weekDays = ['一', '二', '三', '四', '五', '六', '日']
@@ -140,6 +148,169 @@ const calendarCells = computed<CalendarCell[]>(() => {
   return cells
 })
 
+const calendarRows = computed(() => {
+  const rows: CalendarCell[][] = []
+  for (let row = 0; row < 6; row++) {
+    rows.push(calendarCells.value.slice(row * 7, row * 7 + 7))
+  }
+  return rows
+})
+
+const activeCalendarRow = computed(() => focusedCalendarRow.value ?? hoveredCalendarRow.value)
+const focusedRows = computed(() => getRowsAround(focusedCalendarRow.value))
+const isCalendarFocused = computed(() => focusedCalendarRow.value !== null)
+const highlightedRows = computed(() => isCalendarFocused.value ? [] : getRowsAround(activeCalendarRow.value))
+
+function getRowsAround(row: number | null): number[] {
+  if (row === null) return []
+  if (row <= 0) return [0, 1]
+  if (row >= 5) return [4, 5]
+  return [row - 1, row, row + 1]
+}
+
+function getVisibleFocusedRowIndex(row: number): number {
+  return focusedRows.value.indexOf(row)
+}
+
+function isFocusedRangeEnd(row: number): boolean {
+  if (!isCalendarFocused.value || focusedRows.value.length === 0) return false
+  return row === focusedRows.value[focusedRows.value.length - 1]
+}
+
+function getRowTopPercent(row: number) {
+  if (!isCalendarFocused.value) return row * (100 / 6)
+  const index = getVisibleFocusedRowIndex(row)
+  if (index === -1) return row < focusedRows.value[0] ? -20 : 120
+  return FOCUS_AREA_TOP_PERCENT + index * (FOCUS_AREA_HEIGHT_PERCENT / focusedRows.value.length)
+}
+
+function getRowHeightPercent(row: number) {
+  if (!isCalendarFocused.value) return 100 / 6
+  return getVisibleFocusedRowIndex(row) === -1
+    ? 100 / 6
+    : FOCUS_AREA_HEIGHT_PERCENT / focusedRows.value.length
+}
+
+function getCalendarRowStyle(row: number): Record<string, string> {
+  const isHidden = isCalendarFocused.value && getVisibleFocusedRowIndex(row) === -1
+  return {
+    top: `${getRowTopPercent(row)}%`,
+    height: `${getRowHeightPercent(row)}%`,
+    opacity: isHidden ? '0' : '1',
+    pointerEvents: isHidden ? 'none' : 'auto',
+  }
+}
+
+function getHighlightRowStyle(row: number): Record<string, string> {
+  return {
+    top: `calc(${getRowTopPercent(row)}% + var(--calendar-highlight-top-inset))`,
+    height: `calc(${getRowHeightPercent(row)}% - var(--calendar-highlight-height-trim))`,
+  }
+}
+
+function getPointerRow(event: MouseEvent): number | null {
+  const grid = calendarGridRef.value
+  if (!grid) return null
+
+  const rect = grid.getBoundingClientRect()
+  if (rect.height <= 0) return null
+
+  const y = event.clientY - rect.top
+  if (y < 0 || y > rect.height) return null
+
+  if (isCalendarFocused.value) {
+    const focusTop = rect.height * (FOCUS_AREA_TOP_PERCENT / 100)
+    const focusHeight = rect.height * (FOCUS_AREA_HEIGHT_PERCENT / 100)
+    if (y < focusTop || y > focusTop + focusHeight) return focusedCalendarRow.value
+    const rowHeight = focusHeight / focusedRows.value.length
+    const index = Math.min(focusedRows.value.length - 1, Math.floor((y - focusTop) / rowHeight))
+    return focusedRows.value[index] ?? focusedCalendarRow.value
+  }
+
+  return Math.min(5, Math.max(0, Math.floor((y / rect.height) * 6)))
+}
+
+function isPointerInsideFocusedRows(event: MouseEvent): boolean {
+  if (!isCalendarFocused.value) return false
+
+  const grid = calendarGridRef.value
+  if (!grid) return false
+
+  const rect = grid.getBoundingClientRect()
+  if (rect.height <= 0) return false
+
+  const y = event.clientY - rect.top
+  const focusTop = rect.height * (FOCUS_AREA_TOP_PERCENT / 100)
+  const focusHeight = rect.height * (FOCUS_AREA_HEIGHT_PERCENT / 100)
+
+  return y >= focusTop && y <= focusTop + focusHeight
+}
+
+function handleGridMouseMove(event: MouseEvent) {
+  if (isCalendarFocused.value) return
+  const row = getPointerRow(event)
+  if (row !== hoveredCalendarRow.value) {
+    hoveredCalendarRow.value = row
+  }
+}
+
+function handleGridMouseLeave() {
+  if (!isCalendarFocused.value) {
+    hoveredCalendarRow.value = null
+  }
+}
+
+function armFocusTimer() {
+  if (focusTimer) {
+    clearTimeout(focusTimer)
+  }
+  if (focusedCalendarRow.value === null) return
+  focusTimer = setTimeout(() => {
+    clearCalendarFocus()
+  }, FOCUS_TIMEOUT_MS)
+}
+
+function clearCalendarFocus() {
+  if (focusTimer) {
+    clearTimeout(focusTimer)
+    focusTimer = null
+  }
+  focusedCalendarRow.value = null
+  hoveredCalendarRow.value = null
+}
+
+function keepCalendarFocusIndefinitely() {
+  if (focusTimer) {
+    clearTimeout(focusTimer)
+    focusTimer = null
+  }
+}
+
+function focusCalendarRow(row: number) {
+  focusedCalendarRow.value = row
+  hoveredCalendarRow.value = row
+  armFocusTimer()
+}
+
+function handleCalendarGridClick(event: MouseEvent) {
+  const target = event.target as HTMLElement
+  if (target.closest('.todo-bar')) return
+
+  if (isCalendarFocused.value) {
+    if (isPointerInsideFocusedRows(event)) {
+      armFocusTimer()
+    } else {
+      clearCalendarFocus()
+    }
+    return
+  }
+
+  const row = getPointerRow(event)
+  if (row !== null) {
+    focusCalendarRow(row)
+  }
+}
+
 // 加载失败后的重试延迟（毫秒）
 const RELOAD_RETRY_DELAY = 5000
 
@@ -188,12 +359,17 @@ function isCellAdjustWorkday(dateStr: string): boolean {
 
 // 监听年月变化，重新加载节假日数据
 watch([currentYear, currentMonth], () => {
+  clearCalendarFocus()
   loadHolidayData()
 }, { immediate: false })
 
 // 初始化加载节假日数据
 onMounted(() => {
   loadHolidayData()
+})
+
+onUnmounted(() => {
+  clearCalendarFocus()
 })
 
 // 格式化日期为 YYYY-MM-DD
@@ -370,6 +546,9 @@ function goToToday() {
 
 // 点击待办项
 function handleTodoClick(todo: Todo) {
+  if (isCalendarFocused.value) {
+    keepCalendarFocusIndefinitely()
+  }
   emit('select-todo', todo)
 }
 
@@ -380,17 +559,24 @@ const BAR_TOP_OFFSET = 28 // 从日期数字下方开始
 
 // 计算待办条样式
 function getBarStyle(bar: TodoBar): Record<string, string> {
+  if (isCalendarFocused.value && getVisibleFocusedRowIndex(bar.row) === -1) {
+    return {
+      display: 'none'
+    }
+  }
+
   const left = `calc(${bar.startCol} * (100% / 7) + 2px)`
   const width = `calc(${bar.endCol - bar.startCol + 1} * (100% / 7) - 4px)`
   
   // 根据行和层级计算 top 位置
   const laneOffset = bar.lane * (BAR_HEIGHT + BAR_GAP)
-  const top = `calc(${bar.row} * (100% / 6) + ${BAR_TOP_OFFSET + laneOffset}px)`
+  const top = `calc(${getRowTopPercent(bar.row)}% + ${BAR_TOP_OFFSET + laneOffset}px)`
   
   return {
     left,
     width,
     top,
+    height: `${BAR_HEIGHT}px`,
     backgroundColor: bar.todo.color
   }
 }
@@ -414,34 +600,65 @@ defineExpose({
     </div>
 
     <!-- 日历网格 -->
-    <div class="calendar-grid">
-      <!-- 日期格子 -->
-      <div 
-        v-for="(cell, index) in calendarCells" 
-        :key="index"
-        class="calendar-cell"
-        :class="{ 
-          'other-month': !cell.isCurrentMonth,
-          'is-today': cell.isToday
-        }"
-      >
-        <!-- 日期行：阳历 + 农历 -->
-        <div class="cell-date-row">
-          <!-- 左侧：阳历日期 + 班/休角标 -->
-          <div class="cell-date-area">
-            <span class="cell-date">{{ cell.day }}</span>
-            <span v-if="isCellHoliday(cell.dateStr)" class="badge-rest">休</span>
-            <span v-else-if="isCellAdjustWorkday(cell.dateStr)" class="badge-work">班</span>
-          </div>
-          <!-- 右侧：农历/节气/节日 -->
-          <div 
-            class="cell-lunar"
+    <div
+      ref="calendarGridRef"
+      class="calendar-grid"
+      :class="{ 'is-focused': isCalendarFocused }"
+      @mousemove="handleGridMouseMove"
+      @mouseleave="handleGridMouseLeave"
+      @click.capture="handleCalendarGridClick"
+    >
+      <div class="row-highlight-layer" aria-hidden="true">
+        <div
+          v-for="row in highlightedRows"
+          :key="'highlight-' + row"
+          class="row-highlight"
+          :class="{ 'is-current': row === activeCalendarRow }"
+          :style="getHighlightRowStyle(row)"
+        ></div>
+      </div>
+
+      <div class="calendar-row-layer">
+        <div
+          v-for="(rowCells, rowIndex) in calendarRows"
+          :key="'row-' + rowIndex"
+          class="calendar-row"
+          :class="{
+            'is-last-row': rowIndex === 5,
+            'is-hidden-row': isCalendarFocused && getVisibleFocusedRowIndex(rowIndex) === -1,
+            'is-focused-range-end': isFocusedRangeEnd(rowIndex)
+          }"
+          :style="getCalendarRowStyle(rowIndex)"
+        >
+          <div
+            v-for="(cell, cellIndex) in rowCells"
+            :key="cell.dateStr"
+            class="calendar-cell"
             :class="{
-              'is-festival': cell.lunarType === 'festival',
-              'is-solar-term': cell.lunarType === 'solarTerm'
+              'other-month': !cell.isCurrentMonth,
+              'is-today': cell.isToday,
+              'is-last-col': cellIndex === 6
             }"
           >
-            {{ cell.lunarText }}
+            <!-- 日期行：阳历 + 农历 -->
+            <div class="cell-date-row">
+              <!-- 左侧：阳历日期 + 班/休角标 -->
+              <div class="cell-date-area">
+                <span class="cell-date">{{ cell.day }}</span>
+                <span v-if="isCellHoliday(cell.dateStr)" class="badge-rest">休</span>
+                <span v-else-if="isCellAdjustWorkday(cell.dateStr)" class="badge-work">班</span>
+              </div>
+              <!-- 右侧：农历/节气/节日 -->
+              <div
+                class="cell-lunar"
+                :class="{
+                  'is-festival': cell.lunarType === 'festival',
+                  'is-solar-term': cell.lunarType === 'solarTerm'
+                }"
+              >
+                {{ cell.lunarText }}
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -494,36 +711,109 @@ defineExpose({
 }
 
 .calendar-grid {
+  --calendar-highlight-x-inset: 0px;
+  --calendar-highlight-top-inset: 4px;
+  --calendar-highlight-height-trim: 8px;
+
   flex: 1;
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  grid-template-rows: repeat(6, 1fr);
   position: relative;
   overflow: hidden;
+  contain: layout paint;
   /* 添加上边框 - 默认使用深色边框（非固定模式） */
   border-top: 1px solid var(--border);
+
+  &.is-focused {
+    --calendar-highlight-x-inset: 0px;
+    --calendar-highlight-top-inset: 4px;
+    --calendar-highlight-height-trim: 8px;
+  }
+}
+
+.row-highlight-layer,
+.calendar-row-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.row-highlight-layer {
+  z-index: 0;
+  pointer-events: none;
+}
+
+.calendar-row-layer {
+  z-index: 1;
+}
+
+.row-highlight {
+  position: absolute;
+  left: var(--calendar-highlight-x-inset);
+  right: var(--calendar-highlight-x-inset);
+  border-radius: 16px;
+  background: rgba(253, 237, 240, 0.48);
+  opacity: 0.42;
+  transform: scaleX(1) scaleY(0.98);
+  transform-origin: center;
+  transition:
+    top 0.38s cubic-bezier(0.18, 1.32, 0.32, 1),
+    height 0.38s cubic-bezier(0.18, 1.32, 0.32, 1),
+    opacity 0.22s ease,
+    transform 0.34s cubic-bezier(0.18, 1.42, 0.32, 1),
+    background-color 0.22s ease;
+
+  &.is-current {
+    background: rgba(250, 226, 232, 0.52);
+    opacity: 0.58;
+    transform: scaleX(1) scaleY(1);
+  }
+}
+
+.calendar-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  transition:
+    top 0.4s cubic-bezier(0.18, 1.24, 0.32, 1),
+    height 0.4s cubic-bezier(0.18, 1.24, 0.32, 1),
+    opacity 0.18s ease,
+    transform 0.34s cubic-bezier(0.18, 1.28, 0.32, 1);
+  will-change: top, height, opacity;
+
+  &.is-hidden-row {
+    transform: scaleY(0.96);
+  }
 }
 
 .calendar-cell {
   padding: 3px 4px;
-  min-height: 60px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   /* 默认使用深色边框（非固定模式） */
   border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   position: relative;
+  background: transparent;
 
-  /* 每行最后一个单元格不需要右边框 */
-  &:nth-child(7n) {
+  &.is-last-col {
     border-right: none;
   }
+}
 
-  /* 最后一行单元格不需要下边框 */
-  &:nth-child(n+36) {
+.calendar-row.is-last-row {
+  .calendar-cell {
     border-bottom: none;
   }
+}
 
+.calendar-row.is-focused-range-end {
+  .calendar-cell {
+    border-bottom: none;
+  }
+}
+
+.calendar-cell {
   &.other-month {
     .cell-date,
     .cell-lunar,
@@ -625,7 +915,10 @@ defineExpose({
   display: flex;
   align-items: center;
   padding: 0 6px;
-  transition: opacity 0.2s, transform 0.1s;
+  transition:
+    top 0.4s cubic-bezier(0.18, 1.24, 0.32, 1),
+    opacity 0.2s,
+    transform 0.16s cubic-bezier(0.2, 1.2, 0.32, 1);
   z-index: 10;
   overflow: hidden;
 
@@ -665,6 +958,20 @@ defineExpose({
     border-top-color: rgba(255, 255, 255, 0.6);
   }
 
+  .row-highlight {
+    background:
+      linear-gradient(rgba(10, 12, 18, 0.34), rgba(10, 12, 18, 0.34)),
+      rgba(253, 237, 240, 0.46);
+    opacity: 0.34;
+
+    &.is-current {
+      background:
+        linear-gradient(rgba(10, 12, 18, 0.3), rgba(10, 12, 18, 0.3)),
+        rgba(250, 226, 232, 0.5);
+      opacity: 0.48;
+    }
+  }
+
   .calendar-cell {
     border-right-color: rgba(255, 255, 255, 0.6);
     border-bottom-color: rgba(255, 255, 255, 0.6);
@@ -699,6 +1006,15 @@ defineExpose({
   .badge-work {
     color: white;
     background: #F59E0B;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row-highlight,
+  .calendar-row,
+  .todo-bar {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
   }
 }
 </style>

@@ -6,7 +6,7 @@ pub const SUBTASK_COLUMNS: &str =
     "id, parent_id, title, content, completed, sort_order, created_at, updated_at";
 
 pub const TODO_COLUMNS: &str = "id, title, description, color, quadrant, completed, sort_order,
-     start_time, end_time, created_at, updated_at";
+     is_pinned, start_time, end_time, created_at, updated_at";
 
 pub fn subtask_from_row(row: &Row) -> rusqlite::Result<SubTask> {
     Ok(SubTask {
@@ -30,10 +30,11 @@ pub fn todo_from_row(row: &Row) -> rusqlite::Result<Todo> {
         quadrant: row.get(4)?,
         completed: row.get::<_, i32>(5)? != 0,
         sort_order: row.get(6)?,
-        start_time: row.get(7)?,
-        end_time: row.get(8)?,
-        created_at: row.get(9)?,
-        updated_at: row.get(10)?,
+        is_pinned: row.get::<_, i32>(7)? != 0,
+        start_time: row.get(8)?,
+        end_time: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
         reminder_times: Vec::new(),
         legacy_notify_at: None,
         legacy_notify_before: None,
@@ -124,6 +125,8 @@ pub struct Todo {
     pub quadrant: i32,
     pub completed: bool,
     pub sort_order: i32,
+    #[serde(default)]
+    pub is_pinned: bool,
     /// 开始时间（可为空，空则使用 created_at）
     pub start_time: Option<String>,
     /// 截止时间（可为空）
@@ -189,6 +192,7 @@ pub struct UpdateTodoRequest {
     pub reminder_times: Option<Vec<String>>,
     pub completed: Option<bool>,
     pub sort_order: Option<i32>,
+    pub is_pinned: Option<bool>,
     /// 是否明确清除提醒时间
     #[serde(default)]
     pub clear_reminder_times: bool,

@@ -67,10 +67,7 @@ async function deleteTodo(e: Event) {
 // 置顶待办
 async function topTodo(e: Event) {
   e.stopPropagation()
-  const ids = todoStore.pendingTodos
-    .filter(t => t.id !== props.todo.id)
-    .map(t => t.id)
-  await todoStore.reorderTodos([props.todo.id, ...ids])
+  await todoStore.pinTodo(props.todo.id)
 }
 
 // 点击待办

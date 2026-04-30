@@ -138,6 +138,22 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("INSERT INTO migrations (version) VALUES (24)", [])?;
     }
 
+    if current_version < 25 {
+        migration_v25(conn)?;
+        conn.execute("INSERT INTO migrations (version) VALUES (25)", [])?;
+    }
+
+    Ok(())
+}
+
+/// 迁移 v25：记录用户手动置顶状态，置顶事项不再参与自动时间排序。
+fn migration_v25(conn: &Connection) -> Result<()> {
+    add_column_if_missing(
+        conn,
+        "todos",
+        "is_pinned",
+        "is_pinned INTEGER NOT NULL DEFAULT 0",
+    )?;
     Ok(())
 }
 

@@ -249,8 +249,8 @@ pub fn import_data_raw(db: &Database, json_data: &str) -> Result<(), String> {
 
             conn.execute(
                 "INSERT INTO todos (title, description, color, quadrant, completed, sort_order,
-                                   start_time, end_time, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                                   is_pinned, start_time, end_time, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     todo.title,
                     todo.description,
@@ -258,6 +258,7 @@ pub fn import_data_raw(db: &Database, json_data: &str) -> Result<(), String> {
                     todo.quadrant,
                     completed_i,
                     todo.sort_order,
+                    if todo.is_pinned { 1 } else { 0 },
                     todo.start_time,
                     todo.end_time,
                     todo.created_at,

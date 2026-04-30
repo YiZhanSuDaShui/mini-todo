@@ -25,8 +25,13 @@ type SyncNoticeKind = 'success' | 'info' | 'error'
 const syncNotice = ref<{ message: string; kind: SyncNoticeKind } | null>(null)
 let syncNoticeTimer: ReturnType<typeof setTimeout> | null = null
 
-// 是否显示日历
-const showCalendar = computed(() => appStore.showCalendar)
+// 设置中的日历开关只表示“允许显示日历”，实际是否显示由窗口宽度阈值决定。
+const calendarEnabled = computed(() => appStore.showCalendar)
+const showCalendarPanel = ref(false)
+const CALENDAR_LEFT_PANEL_RATIO = 0.38
+const CALENDAR_SPLIT_WIDTH_THRESHOLD = 840
+const SINGLE_PANEL_MIN_WIDTH = 320
+const SINGLE_PANEL_MAX_WIDTH = 720
 
 // 当前视图模式
 const viewMode = computed(() => todoStore.viewMode)
@@ -74,6 +79,7 @@ let unlistenDataImported: (() => void) | null = null
 let unlistenFocus: (() => void) | null = null
 let unlistenSyncCompleted: (() => void) | null = null
 let unlistenTodoLocalChanged: (() => void) | null = null
+let unlistenCalendarSettingChanged: (() => void) | null = null
 
 // 自动同步定时器
 let autoSyncTimer: ReturnType<typeof setInterval> | null = null
@@ -140,41 +146,130 @@ function debouncedSaveState() {
   }, 500)
 }
 
-const preCalendarWidth = ref<number | null>(null)
 let calendarResizeReady = false
+let calendarLayoutSyncTimer: number | null = null
+let lastCalendarWindowWidth: number | null = null
 
-watch(showCalendar, async (show) => {
+interface LogicalWindowSize {
+  width: number
+  height: number
+  scale: number
+}
+
+async function getLogicalWindowSize(): Promise<LogicalWindowSize> {
+  const scale = await appWindow.scaleFactor()
+  const size = await appWindow.outerSize()
+  return {
+    width: size.width / scale,
+    height: size.height / scale,
+    scale
+  }
+}
+
+async function getMaxLogicalWindowWidth(scale: number) {
+  const monitor = await currentMonitor() || await primaryMonitor()
+  if (!monitor) return null
+
+  const monitorLogicalWidth = monitor.size.width / scale
+  const position = await appWindow.outerPosition().catch(() => null)
+  if (!position) {
+    return Math.max(360, Math.floor(monitorLogicalWidth) - 48)
+  }
+
+  const monitorRight = monitor.position.x + monitor.size.width
+  const availableRight = (monitorRight - position.x) / scale - 24
+  return Math.max(360, Math.floor(Math.min(monitorLogicalWidth - 48, availableRight)))
+}
+
+function setCalendarPanelVisible(visible: boolean) {
+  showCalendarPanel.value = visible
+
+  if (visible) {
+    document.documentElement.style.setProperty('--left-panel-width', `${CALENDAR_LEFT_PANEL_RATIO * 100}%`)
+  } else {
+    document.documentElement.style.removeProperty('--left-panel-width')
+  }
+}
+
+async function resizeMainWindowWidth(width: number, height: number) {
+  await appWindow.setSize(new LogicalSize(Math.round(width), Math.round(height)))
+}
+
+async function syncCalendarPanelWithWindow() {
   if (!calendarResizeReady) return
 
   try {
-    const scale = await appWindow.scaleFactor()
-    const size = await appWindow.outerSize()
-    const logicalW = size.width / scale
-    const logicalH = size.height / scale
+    const { width } = await getLogicalWindowSize()
+    const shouldShowPanel = calendarEnabled.value && width >= CALENDAR_SPLIT_WIDTH_THRESHOLD
+    setCalendarPanelVisible(shouldShowPanel)
+  } catch (e) {
+    console.error('Failed to sync calendar panel visibility:', e)
+  }
+}
 
-    if (show) {
-      preCalendarWidth.value = logicalW
+function scheduleCalendarPanelSync(delay = 50) {
+  if (!calendarResizeReady) return
+  if (calendarLayoutSyncTimer) {
+    clearTimeout(calendarLayoutSyncTimer)
+  }
+  calendarLayoutSyncTimer = window.setTimeout(() => {
+    calendarLayoutSyncTimer = null
+    void syncCalendarPanelWithWindow()
+  }, delay)
+}
 
-      document.documentElement.style.setProperty('--left-panel-width', `${logicalW}px`)
+async function expandWindowForCalendarIfNeeded() {
+  try {
+    const { width, height, scale } = await getLogicalWindowSize()
+    const maxWindowW = await getMaxLogicalWindowWidth(scale)
+    const targetWidth = Math.min(
+      Math.max(width, lastCalendarWindowWidth ?? CALENDAR_SPLIT_WIDTH_THRESHOLD, CALENDAR_SPLIT_WIDTH_THRESHOLD),
+      maxWindowW ?? CALENDAR_SPLIT_WIDTH_THRESHOLD
+    )
 
-      const titleBarH = 44
-      const weekdayH = 30
-      const panelPadding = 24
-      const gridH = logicalH - titleBarH - weekdayH - panelPadding
-      const cellH = gridH / 6
-      const gridW = cellH * 7
-      const rightPanelW = gridW + panelPadding
-      const newW = Math.round(logicalW + rightPanelW)
-      await appWindow.setSize(new LogicalSize(newW, logicalH))
-    } else {
-      document.documentElement.style.removeProperty('--left-panel-width')
-      if (preCalendarWidth.value) {
-        await appWindow.setSize(new LogicalSize(preCalendarWidth.value, logicalH))
-        preCalendarWidth.value = null
-      }
+    if (targetWidth > width) {
+      await resizeMainWindowWidth(targetWidth, height)
+    }
+
+    await syncCalendarPanelWithWindow()
+  } catch (e) {
+    console.error('Failed to expand window for calendar:', e)
+  }
+}
+
+async function collapseWindowToLeftPanelWidth() {
+  try {
+    const { width, height, scale } = await getLogicalWindowSize()
+    const maxWindowW = await getMaxLogicalWindowWidth(scale)
+    if (showCalendarPanel.value || width >= CALENDAR_SPLIT_WIDTH_THRESHOLD) {
+      lastCalendarWindowWidth = width
+    }
+    const currentLeftWidth = showCalendarPanel.value
+      ? Math.round(width * CALENDAR_LEFT_PANEL_RATIO)
+      : Math.round(Math.min(width, SINGLE_PANEL_MAX_WIDTH))
+    const targetWidth = Math.max(
+      SINGLE_PANEL_MIN_WIDTH,
+      Math.min(currentLeftWidth, SINGLE_PANEL_MAX_WIDTH, maxWindowW ?? SINGLE_PANEL_MAX_WIDTH)
+    )
+
+    setCalendarPanelVisible(false)
+    await nextTick()
+
+    if (Math.abs(width - targetWidth) > 1) {
+      await resizeMainWindowWidth(targetWidth, height)
     }
   } catch (e) {
-    console.error('Failed to resize window for calendar:', e)
+    console.error('Failed to collapse calendar window:', e)
+  }
+}
+
+watch(calendarEnabled, async (enabled) => {
+  if (!calendarResizeReady) return
+
+  if (enabled) {
+    await expandWindowForCalendarIfNeeded()
+  } else {
+    await collapseWindowToLeftPanelWidth()
   }
 })
 
@@ -192,6 +287,7 @@ onMounted(async () => {
 
   await nextTick()
   calendarResizeReady = true
+  await syncCalendarPanelWithWindow()
   
   // 异步检查版本更新（不阻塞主流程）
   appStore.checkForUpdates()
@@ -208,6 +304,7 @@ onMounted(async () => {
   
   // 监听窗口调整尺寸事件，自动保存状态（防抖）
   unlistenResized = await appWindow.onResized(() => {
+    scheduleCalendarPanelSync()
     debouncedSaveState()
   })
   
@@ -248,6 +345,10 @@ onMounted(async () => {
     scheduleAutoUpload()
   })
 
+  unlistenCalendarSettingChanged = await listen('calendar-setting-changed', async () => {
+    await appStore.loadShowCalendar()
+  })
+
   // 初始化自动同步
   startAutoSync()
   runStartupSync()
@@ -267,6 +368,7 @@ onUnmounted(() => {
   if (unlistenFocus) unlistenFocus()
   if (unlistenSyncCompleted) unlistenSyncCompleted()
   if (unlistenTodoLocalChanged) unlistenTodoLocalChanged()
+  if (unlistenCalendarSettingChanged) unlistenCalendarSettingChanged()
   stopAutoSync()
   stopAutoUpload()
   if (syncNoticeTimer) {
@@ -275,6 +377,9 @@ onUnmounted(() => {
   }
   if (saveDebounceTimer.value) {
     clearTimeout(saveDebounceTimer.value)
+  }
+  if (calendarLayoutSyncTimer) {
+    clearTimeout(calendarLayoutSyncTimer)
   }
 })
 
@@ -604,13 +709,13 @@ function stopAutoUpload() {
 </script>
 
 <template>
-  <div :class="[containerClass, { 'with-calendar': showCalendar }]">
+  <div :class="[containerClass, { 'with-calendar': showCalendarPanel }]">
     <!-- 模态遮罩层 -->
     <div v-if="isModalOpen" class="modal-overlay" @mousedown="bringModalToFront"></div>
     
     <!-- 标题栏 -->
     <TitleBar 
-      :show-calendar-controls="showCalendar"
+      :show-calendar-controls="showCalendarPanel"
       :current-month-text="calendarMonthText"
       :completed-count="completedCount"
       :syncing="titleBarSyncing"
@@ -624,7 +729,7 @@ function stopAutoUpload() {
     />
 
     <!-- 主内容区 - 分栏布局 -->
-    <div class="main-body" :class="{ 'split-layout': showCalendar }">
+    <div class="main-body" :class="{ 'split-layout': showCalendarPanel }">
       <!-- 左侧：待办列表/四象限视图 -->
       <div class="left-panel">
         <div class="main-content">
@@ -644,7 +749,7 @@ function stopAutoUpload() {
       <!-- 已完成列表（独立窗口） -->
 
       <!-- 右侧：日历视图 -->
-      <div v-if="showCalendar" class="right-panel" :class="{ 'dark-theme': appStore.isDarkTheme }">
+      <div v-if="showCalendarPanel" class="right-panel" :class="{ 'dark-theme': appStore.isDarkTheme }">
         <CalendarView
           ref="calendarRef"
           :todos="allTodos"
@@ -690,19 +795,25 @@ function stopAutoUpload() {
 }
 
 .left-panel {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
+  transition: flex-basis 0.18s ease, width 0.18s ease;
 
   .split-layout & {
-    width: var(--left-panel-width, 40%);
+    flex: 0 0 var(--left-panel-width, 38%);
+    width: var(--left-panel-width, 38%);
     min-width: 280px;
     flex-shrink: 0;
   }
 }
 
 .right-panel {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
   overflow: hidden;
   padding: 12px;
   background: transparent;

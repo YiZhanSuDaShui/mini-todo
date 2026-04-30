@@ -303,6 +303,12 @@ async function handleFloatingBubbleChange(value: boolean) {
   }
 }
 
+async function handleShowCalendarChange(value: string | number | boolean) {
+  const show = value === true
+  await appStore.setShowCalendar(show)
+  await emit('calendar-setting-changed', { show })
+}
+
 // 切换软件通知位置
 async function handleAppNotificationPositionChange(value: string | number | boolean) {
   const nextPosition = typeof value === 'string' && appNotificationPositionOptions.some(opt => opt.value === value)
@@ -660,7 +666,7 @@ async function handleCheckUpdate() {
             </div>
             <el-switch 
               :model-value="showCalendar"
-              @change="(val: boolean) => appStore.setShowCalendar(val)"
+              @change="handleShowCalendarChange"
             />
           </div>
 

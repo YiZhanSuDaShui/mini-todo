@@ -2,10 +2,35 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { emit } from '@tauri-apps/api/event'
+import dayjs from 'dayjs'
 import type { Todo, CreateTodoRequest, UpdateTodoRequest, SubTask, CreateSubTaskRequest, UpdateSubTaskRequest, ViewMode, QuadrantType } from '@/types'
 import { QUADRANTS } from '@/types'
 
 const DEFAULT_VIEW_MODE: ViewMode = 'quadrant'
+
+function getOccurrenceScore(todo: Todo) {
+  if (!todo.startTime) return Number.POSITIVE_INFINITY
+  const parsed = dayjs(todo.startTime)
+  return parsed.isValid() ? parsed.valueOf() : Number.POSITIVE_INFINITY
+}
+
+function comparePendingTodos(a: Todo, b: Todo) {
+  if (a.isPinned !== b.isPinned) {
+    return a.isPinned ? -1 : 1
+  }
+
+  if (a.isPinned && b.isPinned) {
+    return a.sortOrder - b.sortOrder || a.id - b.id
+  }
+
+  const aTime = getOccurrenceScore(a)
+  const bTime = getOccurrenceScore(b)
+  if (aTime !== bTime) {
+    return aTime - bTime
+  }
+
+  return a.sortOrder - b.sortOrder || a.id - b.id
+}
 
 export const useTodoStore = defineStore('todo', () => {
   // 状态
@@ -19,10 +44,10 @@ export const useTodoStore = defineStore('todo', () => {
   }
 
   // 计算属性
-  const pendingTodos = computed(() => 
+  const pendingTodos = computed(() =>
     todos.value
       .filter(t => !t.completed)
-      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .sort(comparePendingTodos)
   )
 
   const completedTodos = computed(() => 
@@ -140,6 +165,17 @@ export const useTodoStore = defineStore('todo', () => {
     }
   }
 
+  async function pinTodo(id: number): Promise<boolean> {
+    const todo = todos.value.find(t => t.id === id)
+    if (!todo) return false
+
+    const pinnedOrders = todos.value
+      .filter(t => !t.completed && t.isPinned && t.id !== id)
+      .map(t => t.sortOrder)
+    const nextSortOrder = Math.min(0, ...pinnedOrders) - 1
+    return updateTodo(id, { isPinned: true, sortOrder: nextSortOrder })
+  }
+
   // 更新待办的象限
   async function updateTodoQuadrant(id: number, quadrant: QuadrantType): Promise<boolean> {
     return updateTodo(id, { quadrant })
@@ -245,6 +281,7 @@ export const useTodoStore = defineStore('todo', () => {
     deleteTodo,
     toggleComplete,
     reorderTodos,
+    pinTodo,
     updateTodoQuadrant,
     setViewMode,
     loadViewMode,

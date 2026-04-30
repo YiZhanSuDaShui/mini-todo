@@ -209,6 +209,10 @@ pub fn update_todo(db: State<Database>, id: i64, data: UpdateTodoRequest) -> Res
             updates.push("sort_order = ?");
             params.push(Box::new(sort_order));
         }
+        if let Some(is_pinned) = data.is_pinned {
+            updates.push("is_pinned = ?");
+            params.push(Box::new(if is_pinned { 1 } else { 0 }));
+        }
         // 开始时间
         if data.clear_start_time {
             updates.push("start_time = NULL");

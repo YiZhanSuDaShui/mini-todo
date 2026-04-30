@@ -12,6 +12,13 @@ dist
 dist-ssr
 *.local
 
+# Local verification and packaging artifacts
+$err
+$log
+tmp-*.png
+mini-todo-portable-windows.zip
+mini-todo-portable-windows/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

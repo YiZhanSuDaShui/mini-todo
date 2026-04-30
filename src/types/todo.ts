@@ -61,6 +61,8 @@ export interface Todo {
   reminderTimes: string[]
   completed: boolean
   sortOrder: number
+  /** 用户手动置顶后不再参与自动时间排序 */
+  isPinned: boolean
   /** 开始时间（可为空，空则使用 createdAt） */
   startTime: string | null
   /** 截止时间（可为空） */
@@ -116,6 +118,8 @@ export interface UpdateTodoRequest {
   reminderTimes?: string[]
   completed?: boolean
   sortOrder?: number
+  /** 用户手动置顶后不再参与自动时间排序 */
+  isPinned?: boolean
   /** 是否明确清除提醒时间 */
   clearReminderTimes?: boolean
   /** 开始时间 */

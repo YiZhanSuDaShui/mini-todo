@@ -94,6 +94,8 @@ pub struct SyncTodo {
     pub quadrant: i32,
     pub completed: bool,
     pub sort_order: i32,
+    #[serde(default)]
+    pub is_pinned: bool,
     pub start_time: Option<String>,
     pub end_time: Option<String>,
     pub created_at: String,
@@ -591,7 +593,7 @@ fn collect_local_snapshot(db: &Database, settings: &SyncSettings) -> Result<Sync
 
         let mut todos_stmt = conn.prepare(
             "SELECT sync_id, title, description, color, quadrant, completed, sort_order,
-                    start_time, end_time, created_at, updated_at
+                    is_pinned, start_time, end_time, created_at, updated_at
              FROM todos
              ORDER BY completed ASC, sort_order ASC, created_at DESC",
         )?;
@@ -605,10 +607,11 @@ fn collect_local_snapshot(db: &Database, settings: &SyncSettings) -> Result<Sync
                     quadrant: row.get(4)?,
                     completed: row.get::<_, i32>(5)? != 0,
                     sort_order: row.get(6)?,
-                    start_time: row.get(7)?,
-                    end_time: row.get(8)?,
-                    created_at: row.get(9)?,
-                    updated_at: row.get(10)?,
+                    is_pinned: row.get::<_, i32>(7)? != 0,
+                    start_time: row.get(8)?,
+                    end_time: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
                     updated_by_device_id: settings.device_id.clone(),
                     revision: 1,
                 })
@@ -956,11 +959,12 @@ fn apply_snapshot_to_local(db: &Database, data: &SyncData) -> Result<(), String>
                         quadrant = ?4,
                         completed = ?5,
                         sort_order = ?6,
-                        start_time = ?7,
-                        end_time = ?8,
-                        created_at = ?9,
-                        updated_at = ?10
-                     WHERE id = ?11",
+                        is_pinned = ?7,
+                        start_time = ?8,
+                        end_time = ?9,
+                        created_at = ?10,
+                        updated_at = ?11
+                     WHERE id = ?12",
                     params![
                         &todo.title,
                         &todo.description,
@@ -968,6 +972,7 @@ fn apply_snapshot_to_local(db: &Database, data: &SyncData) -> Result<(), String>
                         todo.quadrant,
                         if todo.completed { 1 } else { 0 },
                         todo.sort_order,
+                        if todo.is_pinned { 1 } else { 0 },
                         &todo.start_time,
                         &todo.end_time,
                         &todo.created_at,
@@ -979,8 +984,8 @@ fn apply_snapshot_to_local(db: &Database, data: &SyncData) -> Result<(), String>
                 conn.execute(
                     "INSERT INTO todos
                         (sync_id, title, description, color, quadrant, completed, sort_order,
-                         start_time, end_time, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                         is_pinned, start_time, end_time, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                     params![
                         &todo.sync_id,
                         &todo.title,
@@ -989,6 +994,7 @@ fn apply_snapshot_to_local(db: &Database, data: &SyncData) -> Result<(), String>
                         todo.quadrant,
                         if todo.completed { 1 } else { 0 },
                         todo.sort_order,
+                        if todo.is_pinned { 1 } else { 0 },
                         &todo.start_time,
                         &todo.end_time,
                         &todo.created_at,
@@ -1471,6 +1477,10 @@ fn parse_sync_data_or_legacy(json_text: &str) -> Result<Option<SyncData>, String
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
             sort_order: todo.get("sortOrder").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+            is_pinned: todo
+                .get("isPinned")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
             start_time: todo
                 .get("startTime")
                 .and_then(|v| v.as_str())

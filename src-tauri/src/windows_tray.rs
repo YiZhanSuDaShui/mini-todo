@@ -1,5 +1,6 @@
 use std::{ffi::c_void, path::PathBuf};
 
+use raw_window_handle::HasWindowHandle;
 use tauri::{AppHandle, Manager};
 use windows::{
     core::PCWSTR,
@@ -14,14 +15,14 @@ use windows::{
             },
             WindowsAndMessaging::{
                 AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
-                DestroyMenu, DestroyWindow, GetCursorPos, GetSystemMetrics, GetWindowLongPtrW,
-                LoadIconW, LoadImageW, PostMessageW, RegisterClassW, SetForegroundWindow,
-                SetWindowLongPtrW, TrackPopupMenu, CREATESTRUCTW, GWLP_USERDATA, HICON, HMENU,
-                IDI_APPLICATION, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, MF_SEPARATOR,
-                MF_STRING, SM_CYSCREEN, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
-                TPM_RIGHTBUTTON, TPM_TOPALIGN, WM_APP, WM_CONTEXTMENU, WM_DESTROY, WM_NCCREATE,
-                WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-                WS_OVERLAPPED,
+                DestroyMenu, DestroyWindow, GetAncestor, GetCursorPos, GetSystemMetrics,
+                GetWindowLongPtrW, LoadIconW, LoadImageW, PostMessageW, RegisterClassW,
+                SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TrackPopupMenu, CREATESTRUCTW,
+                GA_ROOT, GWLP_USERDATA, HICON, HMENU, IDI_APPLICATION, IMAGE_ICON, LR_DEFAULTSIZE,
+                LR_LOADFROMFILE, MF_SEPARATOR, MF_STRING, SM_CYSCREEN, SW_SHOWNORMAL,
+                TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TPM_TOPALIGN,
+                WM_APP, WM_CONTEXTMENU, WM_DESTROY, WM_NCCREATE, WM_NULL, WM_RBUTTONUP, WNDCLASSW,
+                WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
             },
         },
     },
@@ -320,6 +321,17 @@ fn icon_candidates() -> Vec<PathBuf> {
 fn show_main_window_from_tray(app: &AppHandle) {
     if let Some(webview_window) = app.get_webview_window("main") {
         let _ = webview_window.unminimize();
+        if let Ok(handle) = webview_window.window_handle() {
+            if let raw_window_handle::RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
+                let hwnd = HWND(win32_handle.hwnd.get() as *mut _);
+                let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
+                let target = if root.0.is_null() { hwnd } else { root };
+                unsafe {
+                    let _ = ShowWindow(target, SW_SHOWNORMAL);
+                    let _ = SetForegroundWindow(target);
+                }
+            }
+        }
         let _ = webview_window.show();
         let _ = webview_window.set_focus();
     }

@@ -91,6 +91,30 @@ async function handleDelete(todo: Todo) {
   /* min-height: 200px; */
 }
 
+/* 列表项进入/离开动画 */
+:deep(.todo-item) {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+:deep(.list-move) {
+  transition: transform 0.3s ease;
+}
+
+:deep(.list-enter-active),
+:deep(.list-leave-active) {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+:deep(.list-enter-from) {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+
+:deep(.list-leave-to) {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
 .empty-state {
   display: flex;
   flex-direction: column;

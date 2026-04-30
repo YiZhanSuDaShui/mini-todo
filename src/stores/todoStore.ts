@@ -3,10 +3,11 @@ import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { emit } from '@tauri-apps/api/event'
 import dayjs from 'dayjs'
-import type { Todo, CreateTodoRequest, UpdateTodoRequest, SubTask, CreateSubTaskRequest, UpdateSubTaskRequest, ViewMode, QuadrantType } from '@/types'
-import { QUADRANTS } from '@/types'
+import type { Todo, CreateTodoRequest, UpdateTodoRequest, SubTask, CreateSubTaskRequest, UpdateSubTaskRequest, ViewMode, QuadrantType, ViewRange } from '@/types'
+import { QUADRANTS, DEFAULT_VIEW_RANGE } from '@/types'
 
 const DEFAULT_VIEW_MODE: ViewMode = 'quadrant'
+const VIEW_RANGE_STORAGE_KEY = 'mini-todo-view-range'
 
 function getOccurrenceScore(todo: Todo) {
   if (!todo.startTime) return Number.POSITIVE_INFINITY
@@ -32,26 +33,83 @@ function comparePendingTodos(a: Todo, b: Todo) {
   return a.sortOrder - b.sortOrder || a.id - b.id
 }
 
+function loadViewRangeFromStorage(): ViewRange {
+  try {
+    const stored = localStorage.getItem(VIEW_RANGE_STORAGE_KEY)
+    if (stored === '7D' || stored === '3D' || stored === '1D' || stored === 'ALL') {
+      return stored
+    }
+  } catch {
+    // localStorage 不可用
+  }
+  return DEFAULT_VIEW_RANGE
+}
+
+function saveViewRangeToStorage(range: ViewRange) {
+  try {
+    localStorage.setItem(VIEW_RANGE_STORAGE_KEY, range)
+  } catch {
+    // localStorage 不可用
+  }
+}
+
+function isTodoInViewRange(todo: Todo, viewRange: ViewRange): boolean {
+  // ALL: 显示所有事项
+  if (viewRange === 'ALL') return true
+
+  // 无开始时间的事项始终显示（不隐藏）
+  if (!todo.startTime) return true
+
+  const startDate = dayjs(todo.startTime)
+  if (!startDate.isValid()) return true
+
+  const today = dayjs().startOf('day')
+  const todoDate = startDate.startOf('day')
+
+  // 计算事项开始日期与今天的差值（天数）
+  const diffDays = todoDate.diff(today, 'day')
+
+  switch (viewRange) {
+    case '1D':
+      // 1D: 只显示今天及之前的（未完成的过去事项也要显示）
+      return diffDays <= 0
+    case '3D':
+      // 3D: 显示今天起未来3天内（今天、明天、后天）以及所有过去的事项
+      return diffDays <= 2
+    case '7D':
+      // 7D: 显示今天起未来7天内以及所有过去的事项
+      return diffDays <= 6
+    default:
+      return true
+  }
+}
+
 export const useTodoStore = defineStore('todo', () => {
   // 状态
   const todos = ref<Todo[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
   const viewMode = ref<ViewMode>(DEFAULT_VIEW_MODE)
+  const viewRange = ref<ViewRange>(loadViewRangeFromStorage())
 
   function notifyLocalChanged() {
     emit('todo-local-changed').catch(() => undefined)
   }
 
+  // 经过时间范围过滤的待办
+  const filteredTodos = computed(() => {
+    return todos.value.filter(t => isTodoInViewRange(t, viewRange.value))
+  })
+
   // 计算属性
   const pendingTodos = computed(() =>
-    todos.value
+    filteredTodos.value
       .filter(t => !t.completed)
       .sort(comparePendingTodos)
   )
 
-  const completedTodos = computed(() => 
-    todos.value
+  const completedTodos = computed(() =>
+    filteredTodos.value
       .filter(t => t.completed)
       .sort((a, b) => b.sortOrder - a.sortOrder)
   )
@@ -62,7 +120,7 @@ export const useTodoStore = defineStore('todo', () => {
     completed: completedTodos.value.length
   }))
 
-  // 按象限分组的待办（仅未完成）
+  // 按象限分组的待办（仅未完成，已过滤）
   const todosByQuadrant = computed(() => {
     const result: Record<QuadrantType, Todo[]> = {
       [QUADRANTS.IMPORTANT_URGENT]: [],
@@ -70,7 +128,7 @@ export const useTodoStore = defineStore('todo', () => {
       [QUADRANTS.URGENT_NOT_IMPORTANT]: [],
       [QUADRANTS.NOT_URGENT_NOT_IMPORTANT]: [],
     }
-    
+
     pendingTodos.value.forEach(todo => {
       const quadrant = todo.quadrant as QuadrantType
       if (result[quadrant]) {
@@ -80,7 +138,7 @@ export const useTodoStore = defineStore('todo', () => {
         result[QUADRANTS.IMPORTANT_URGENT].push(todo)
       }
     })
-    
+
     return result
   })
 
@@ -176,6 +234,12 @@ export const useTodoStore = defineStore('todo', () => {
     return updateTodo(id, { isPinned: true, sortOrder: nextSortOrder })
   }
 
+  async function unpinTodo(id: number): Promise<boolean> {
+    const todo = todos.value.find(t => t.id === id)
+    if (!todo) return false
+    return updateTodo(id, { isPinned: false })
+  }
+
   // 更新待办的象限
   async function updateTodoQuadrant(id: number, quadrant: QuadrantType): Promise<boolean> {
     return updateTodo(id, { quadrant })
@@ -196,6 +260,20 @@ export const useTodoStore = defineStore('todo', () => {
   // 保留方法给标题栏调用，但不持久化到本机数据库或 WebDAV。
   async function saveViewMode() {
     return
+  }
+
+  // 设置时间范围视图
+  function setViewRange(range: ViewRange) {
+    viewRange.value = range
+    saveViewRangeToStorage(range)
+  }
+
+  // 循环切换时间范围
+  function cycleViewRange() {
+    const ranges: ViewRange[] = ['7D', '3D', '1D', 'ALL']
+    const currentIndex = ranges.indexOf(viewRange.value)
+    const nextIndex = (currentIndex + 1) % ranges.length
+    setViewRange(ranges[nextIndex])
   }
 
   // 子任务操作
@@ -269,6 +347,7 @@ export const useTodoStore = defineStore('todo', () => {
     loading,
     error,
     viewMode,
+    viewRange,
     // 计算属性
     pendingTodos,
     completedTodos,
@@ -282,10 +361,13 @@ export const useTodoStore = defineStore('todo', () => {
     toggleComplete,
     reorderTodos,
     pinTodo,
+    unpinTodo,
     updateTodoQuadrant,
     setViewMode,
     loadViewMode,
     saveViewMode,
+    setViewRange,
+    cycleViewRange,
     addSubTask,
     updateSubTask,
     deleteSubTask,

@@ -252,10 +252,35 @@ function getQuadrantStyle(quadrant: typeof quadrantConfig.value[0]) {
 
 .quadrant-todo-item {
   margin-bottom: 4px;
+  transition: opacity 0.25s ease, transform 0.25s ease;
 
   &:last-child {
     margin-bottom: 0;
   }
+}
+
+/* 列表切换动效 */
+:deep(.todo-item) {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+:deep(.list-move) {
+  transition: transform 0.3s ease;
+}
+
+:deep(.list-enter-active),
+:deep(.list-leave-active) {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+:deep(.list-enter-from) {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+:deep(.list-leave-to) {
+  opacity: 0;
+  transform: translateY(6px);
 }
 
 /* 拖拽中样式 */

@@ -38,6 +38,9 @@ const isDarkTheme = computed(() => appStore.isDarkTheme)
 // 当前视图模式
 const viewMode = computed(() => todoStore.viewMode)
 
+// 当前时间范围视图
+const viewRange = computed(() => todoStore.viewRange)
+
 // 切换视图模式
 async function toggleViewMode() {
   const newMode: ViewMode = viewMode.value === 'list' ? 'quadrant' : 'list'
@@ -122,6 +125,16 @@ async function handleVersionClick() {
 
     <!-- 日历控制区域（居中显示） -->
     <div v-if="showCalendarControls" class="title-center">
+      <!-- 时间范围切换按钮 -->
+      <el-button
+        size="small"
+        class="view-range-btn"
+        :title="`当前显示范围：${viewRange}，点击切换`"
+        @mousedown.stop
+        @click.stop="todoStore.cycleViewRange()"
+      >
+        {{ viewRange }}
+      </el-button>
       <div class="calendar-nav">
         <el-button
           text
@@ -389,6 +402,21 @@ async function handleVersionClick() {
   color: rgba(15, 23, 42, 0.9);
 }
 
+/* 深色主题下的时间范围按钮 */
+.title-bar.dark-theme {
+  .view-range-btn {
+    color: var(--text-primary) !important;
+    background: transparent !important;
+    border-color: rgba(255, 255, 255, 0.4) !important;
+
+    &:hover {
+      color: white !important;
+      background: rgba(255, 255, 255, 0.15) !important;
+      border-color: rgba(255, 255, 255, 0.5) !important;
+    }
+  }
+}
+
 .calendar-nav {
   display: flex;
   align-items: center;
@@ -424,6 +452,22 @@ async function handleVersionClick() {
   color: var(--text-secondary) !important;
   background: var(--bg-secondary) !important;
   border-color: var(--border) !important;
+
+  &:hover {
+    color: var(--primary) !important;
+    background: var(--bg-tertiary) !important;
+    border-color: var(--primary) !important;
+  }
+}
+
+.view-range-btn {
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+  color: var(--text-secondary) !important;
+  background: var(--bg-secondary) !important;
+  border-color: var(--border) !important;
+  font-weight: 600;
+  min-width: 50px;
 
   &:hover {
     color: var(--primary) !important;

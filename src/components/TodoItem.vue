@@ -64,10 +64,14 @@ async function deleteTodo(e: Event) {
   }
 }
 
-// 置顶待办
-async function topTodo(e: Event) {
+// 置顶/取消置顶待办
+async function togglePin(e: Event) {
   e.stopPropagation()
-  await todoStore.pinTodo(props.todo.id)
+  if (props.todo.isPinned) {
+    await todoStore.unpinTodo(props.todo.id)
+  } else {
+    await todoStore.pinTodo(props.todo.id)
+  }
 }
 
 // 点击待办
@@ -104,10 +108,22 @@ function handleClick() {
       </div>
     </div>
 
+    <!-- 置顶图标（在标题旁显示） -->
+    <el-icon
+      v-if="todo.isPinned && !isCompleted"
+      class="pin-indicator"
+      :size="14"
+      title="已置顶"
+    >
+      <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
+        <path d="M16 12V4H17V2H7V4H8V12L6 14V16H11.2V22H12.8V16H18V14L16 12Z"/>
+      </svg>
+    </el-icon>
+
     <!-- 操作按钮 -->
     <div class="todo-actions">
-      <button 
-        class="action-btn complete-btn" 
+      <button
+        class="action-btn complete-btn"
         :title="isCompleted ? '取消完成' : '完成'"
         @click="toggleComplete"
       >
@@ -117,17 +133,22 @@ function handleClick() {
         </el-icon>
       </button>
 
-      <button 
+      <button
         v-if="!isCompleted"
-        class="action-btn top-btn" 
-        title="置顶"
-        @click="topTodo"
+        class="action-btn pin-btn"
+        :class="{ pinned: todo.isPinned }"
+        :title="todo.isPinned ? '取消置顶' : '置顶'"
+        @click="togglePin"
       >
-        <el-icon :size="16"><Top /></el-icon>
+        <el-icon :size="16">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16">
+            <path d="M16 12V4H17V2H7V4H8V12L6 14V16H11.2V22H12.8V16H18V14L16 12Z"/>
+          </svg>
+        </el-icon>
       </button>
 
-      <button 
-        class="action-btn delete-btn" 
+      <button
+        class="action-btn delete-btn"
         title="删除"
         @click="deleteTodo"
       >

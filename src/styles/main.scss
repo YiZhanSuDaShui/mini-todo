@@ -467,10 +467,26 @@ body.platform-macos.dark-theme #app .app-container .empty-state {
         color: var(--warning);
       }
 
+      &.pin-btn:hover {
+        color: var(--warning);
+      }
+
+      &.pin-btn.pinned {
+        color: var(--warning);
+      }
+
       &.delete-btn:hover {
         color: var(--error);
       }
     }
+  }
+
+  .pin-indicator {
+    flex-shrink: 0;
+    margin-right: var(--space-2);
+    margin-top: 4px;
+    color: var(--warning);
+    opacity: 0.8;
   }
 }
 

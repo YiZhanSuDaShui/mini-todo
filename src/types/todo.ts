@@ -37,6 +37,11 @@ export const DEFAULT_QUADRANT = QUADRANTS.NOT_URGENT_NOT_IMPORTANT
 // 视图模式
 export type ViewMode = 'list' | 'quadrant'
 
+// 时间范围视图
+export type ViewRange = '7D' | '3D' | '1D' | 'ALL'
+export const VIEW_RANGES: ViewRange[] = ['7D', '3D', '1D', 'ALL']
+export const DEFAULT_VIEW_RANGE: ViewRange = '7D'
+
 // 子任务接口
 export interface SubTask {
   id: number

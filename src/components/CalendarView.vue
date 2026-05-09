@@ -712,13 +712,25 @@ defineExpose({
 
 .calendar-grid {
   --calendar-highlight-x-inset: 0px;
+  --calendar-highlight-left-bleed: 16px;
+  --calendar-highlight-right-bleed: 10px;
+  --calendar-highlight-edge-fade: 36px;
+  --calendar-highlight-left-arc-size: 46px;
+  --calendar-highlight-left-arc-center: 34px;
+  --calendar-highlight-line-bleed: 14px;
+  --calendar-highlight-line-fade: 36px;
+  --calendar-highlight-line-width: 2px;
+  --calendar-highlight-line-color: rgba(255, 211, 223, 0.96);
+  --calendar-highlight-line-glow: rgba(255, 238, 242, 0.66);
   --calendar-highlight-top-inset: 4px;
   --calendar-highlight-height-trim: 8px;
+  --calendar-highlight-color: rgba(253, 237, 240, 0.48);
+  --calendar-highlight-current-color: rgba(250, 226, 232, 0.52);
 
   flex: 1;
   position: relative;
-  overflow: hidden;
-  contain: layout paint;
+  overflow: visible;
+  contain: layout;
   /* 添加上边框 - 默认使用深色边框（非固定模式） */
   border-top: 1px solid var(--border);
 
@@ -746,10 +758,24 @@ defineExpose({
 
 .row-highlight {
   position: absolute;
-  left: var(--calendar-highlight-x-inset);
-  right: var(--calendar-highlight-x-inset);
-  border-radius: 16px;
-  background: rgba(253, 237, 240, 0.48);
+  left: calc(var(--calendar-highlight-x-inset) - var(--calendar-highlight-left-bleed));
+  right: calc(var(--calendar-highlight-x-inset) - var(--calendar-highlight-right-bleed));
+  border-radius: 0;
+  background:
+    radial-gradient(
+      ellipse var(--calendar-highlight-left-arc-size) 78% at var(--calendar-highlight-left-arc-center) 50%,
+      var(--calendar-highlight-color) 0,
+      var(--calendar-highlight-color) 38%,
+      rgba(253, 237, 240, 0.18) 68%,
+      rgba(253, 237, 240, 0) 100%
+    ),
+    linear-gradient(
+      90deg,
+      rgba(253, 237, 240, 0) 0,
+      var(--calendar-highlight-color) var(--calendar-highlight-edge-fade),
+      var(--calendar-highlight-color) calc(100% - var(--calendar-highlight-edge-fade)),
+      rgba(253, 237, 240, 0) 100%
+    );
   opacity: 0.42;
   transform: scaleX(1) scaleY(0.98);
   transform-origin: center;
@@ -761,9 +787,52 @@ defineExpose({
     background-color 0.22s ease;
 
   &.is-current {
-    background: rgba(250, 226, 232, 0.52);
+    background:
+      radial-gradient(
+        ellipse var(--calendar-highlight-left-arc-size) 78% at var(--calendar-highlight-left-arc-center) 50%,
+        var(--calendar-highlight-current-color) 0,
+        var(--calendar-highlight-current-color) 38%,
+        rgba(250, 226, 232, 0.2) 68%,
+        rgba(250, 226, 232, 0) 100%
+      ),
+      linear-gradient(
+        90deg,
+        rgba(250, 226, 232, 0) 0,
+        var(--calendar-highlight-current-color) var(--calendar-highlight-edge-fade),
+        var(--calendar-highlight-current-color) calc(100% - var(--calendar-highlight-edge-fade)),
+        rgba(250, 226, 232, 0) 100%
+      );
     opacity: 0.58;
     transform: scaleX(1) scaleY(1);
+  }
+
+  &::before,
+  &::after {
+    content: '';
+    position: absolute;
+    left: calc(-1 * var(--calendar-highlight-line-bleed));
+    right: calc(-1 * var(--calendar-highlight-line-bleed));
+    height: var(--calendar-highlight-line-width);
+    background:
+      linear-gradient(
+        90deg,
+        rgba(255, 222, 230, 0) 0,
+        var(--calendar-highlight-line-glow) 12px,
+        var(--calendar-highlight-line-color) var(--calendar-highlight-line-fade),
+        var(--calendar-highlight-line-color) calc(100% - 18px),
+        rgba(255, 222, 230, 0) 100%
+      );
+    border-radius: 999px;
+    box-shadow: 0 0 3px var(--calendar-highlight-line-glow);
+    pointer-events: none;
+  }
+
+  &::before {
+    top: 0;
+  }
+
+  &::after {
+    bottom: 0;
   }
 }
 
@@ -959,15 +1028,45 @@ defineExpose({
   }
 
   .row-highlight {
+    --calendar-highlight-color: rgba(253, 237, 240, 0.46);
+    --calendar-highlight-line-color: rgba(255, 226, 234, 0.78);
+    --calendar-highlight-line-glow: rgba(255, 238, 242, 0.4);
     background:
       linear-gradient(rgba(10, 12, 18, 0.34), rgba(10, 12, 18, 0.34)),
-      rgba(253, 237, 240, 0.46);
+      radial-gradient(
+        ellipse var(--calendar-highlight-left-arc-size) 78% at var(--calendar-highlight-left-arc-center) 50%,
+        var(--calendar-highlight-color) 0,
+        var(--calendar-highlight-color) 38%,
+        rgba(253, 237, 240, 0.16) 68%,
+        rgba(253, 237, 240, 0) 100%
+      ),
+      linear-gradient(
+        90deg,
+        rgba(253, 237, 240, 0) 0,
+        var(--calendar-highlight-color) var(--calendar-highlight-edge-fade),
+        var(--calendar-highlight-color) calc(100% - var(--calendar-highlight-edge-fade)),
+        rgba(253, 237, 240, 0) 100%
+      );
     opacity: 0.34;
 
     &.is-current {
+      --calendar-highlight-current-color: rgba(250, 226, 232, 0.5);
       background:
         linear-gradient(rgba(10, 12, 18, 0.3), rgba(10, 12, 18, 0.3)),
-        rgba(250, 226, 232, 0.5);
+        radial-gradient(
+          ellipse var(--calendar-highlight-left-arc-size) 78% at var(--calendar-highlight-left-arc-center) 50%,
+          var(--calendar-highlight-current-color) 0,
+          var(--calendar-highlight-current-color) 38%,
+          rgba(250, 226, 232, 0.18) 68%,
+          rgba(250, 226, 232, 0) 100%
+        ),
+        linear-gradient(
+          90deg,
+          rgba(250, 226, 232, 0) 0,
+          var(--calendar-highlight-current-color) var(--calendar-highlight-edge-fade),
+          var(--calendar-highlight-current-color) calc(100% - var(--calendar-highlight-edge-fade)),
+          rgba(250, 226, 232, 0) 100%
+        );
       opacity: 0.48;
     }
   }

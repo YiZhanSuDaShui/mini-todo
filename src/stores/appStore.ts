@@ -88,6 +88,7 @@ export const useAppStore = defineStore('app', () => {
   
   // 日历显示状态
   const showCalendar = ref(false)
+  const calendarShowCompleted = ref(true)
   // 是否启用贴边自动隐藏
   const autoHideEnabled = ref(true)
   
@@ -517,6 +518,7 @@ export const useAppStore = defineStore('app', () => {
       
       // 加载日历显示状态
       await loadShowCalendar()
+      await loadCalendarShowCompleted()
     } catch (e) {
       console.error('Failed to load settings:', e)
     }
@@ -529,6 +531,16 @@ export const useAppStore = defineStore('app', () => {
     } catch (e) {
       console.error('Failed to load show calendar setting:', e)
       showCalendar.value = false
+    }
+  }
+
+  // 加载日历已完成事项显示状态。本地偏好，默认显示。
+  async function loadCalendarShowCompleted() {
+    try {
+      calendarShowCompleted.value = await invoke<boolean>('get_calendar_show_completed')
+    } catch (e) {
+      console.error('Failed to load calendar completed visibility setting:', e)
+      calendarShowCompleted.value = true
     }
   }
 
@@ -560,6 +572,19 @@ export const useAppStore = defineStore('app', () => {
       await invoke('set_show_calendar', { show })
     } catch (e) {
       console.error('Failed to set show calendar:', e)
+    }
+  }
+
+  // 设置日历是否显示已完成事项
+  async function setCalendarShowCompleted(showCompleted: boolean) {
+    const oldValue = calendarShowCompleted.value
+    try {
+      calendarShowCompleted.value = showCompleted
+      await invoke('set_calendar_show_completed', { showCompleted })
+    } catch (e) {
+      console.error('Failed to set calendar completed visibility:', e)
+      calendarShowCompleted.value = oldValue
+      throw e
     }
   }
 
@@ -856,6 +881,7 @@ export const useAppStore = defineStore('app', () => {
     screenConfigs,
     // 日历状态
     showCalendar,
+    calendarShowCompleted,
     autoHideEnabled,
     // 方法
     initSettings,
@@ -883,6 +909,8 @@ export const useAppStore = defineStore('app', () => {
     loadShowCalendar,
     toggleShowCalendar,
     setShowCalendar,
+    loadCalendarShowCompleted,
+    setCalendarShowCompleted,
     // 自动隐藏方法
     loadAutoHideEnabled,
     setAutoHideEnabled

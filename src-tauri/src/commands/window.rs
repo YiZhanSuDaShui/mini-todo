@@ -15,12 +15,13 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetAncestor, GetClassNameW, GetForegroundWindow, GetMessageW, GetShellWindow,
-    GetWindowLongPtrW, GetWindowRect, IsWindow, IsWindowVisible, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, TranslateMessage, EVENT_SYSTEM_FOREGROUND, GA_ROOT, GWL_EXSTYLE, GWL_STYLE,
-    HWND_NOTOPMOST, HWND_TOPMOST, MSG, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, WINEVENT_OUTOFCONTEXT, WS_CAPTION,
-    WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_THICKFRAME,
+    BringWindowToTop, DispatchMessageW, GetAncestor, GetClassNameW, GetForegroundWindow,
+    GetMessageW, GetShellWindow, GetWindowLongPtrW, GetWindowRect, IsWindow, IsWindowVisible,
+    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage,
+    EVENT_SYSTEM_FOREGROUND, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, HWND_NOTOPMOST, HWND_TOPMOST, MSG,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE,
+    SW_SHOWNOACTIVATE, SW_SHOWNORMAL, WINEVENT_OUTOFCONTEXT, WS_CAPTION, WS_EX_APPWINDOW,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_THICKFRAME,
 };
 
 /// 全局悬浮球入口状态（沿用旧命名以兼容历史调用）
@@ -61,6 +62,26 @@ fn show_window_win32<T: raw_window_handle::HasWindowHandle>(window: &T) -> Resul
     let hwnd = hwnd_from_window(window)?;
     unsafe {
         let _ = ShowWindow(hwnd, SW_SHOWNORMAL);
+        let _ = SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+        );
+        let _ = SetWindowPos(
+            hwnd,
+            HWND_NOTOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+        );
+        let _ = BringWindowToTop(hwnd);
+        let _ = SetForegroundWindow(hwnd);
     }
     Ok(())
 }
@@ -71,6 +92,33 @@ fn is_window_visible_win32<T: raw_window_handle::HasWindowHandle>(
 ) -> Result<bool, String> {
     let hwnd = hwnd_from_window(window)?;
     Ok(unsafe { IsWindowVisible(hwnd).as_bool() })
+}
+
+#[cfg(target_os = "windows")]
+fn is_window_or_bubble_foreground_win32<T: raw_window_handle::HasWindowHandle>(
+    window: &T,
+    app_handle: &AppHandle,
+) -> Result<bool, String> {
+    let hwnd = hwnd_from_window(window)?;
+    let foreground = unsafe { GetForegroundWindow() };
+    if foreground.0.is_null() {
+        return Ok(false);
+    }
+
+    let foreground_root = unsafe { GetAncestor(foreground, GA_ROOT) };
+    if is_same_hwnd(hwnd, foreground) || is_same_hwnd(hwnd, foreground_root) {
+        return Ok(true);
+    }
+
+    if let Some(bubble) = app_handle.get_webview_window("fixed-bubble") {
+        if let Ok(bubble_hwnd) = hwnd_from_window(&bubble) {
+            if is_same_hwnd(bubble_hwnd, foreground) || is_same_hwnd(bubble_hwnd, foreground_root) {
+                return Ok(true);
+            }
+        }
+    }
+
+    Ok(false)
 }
 
 #[cfg(target_os = "windows")]
@@ -638,7 +686,13 @@ pub fn toggle_main_window(app_handle: AppHandle) -> Result<bool, String> {
 
     let onscreen = is_window_usable_on_screen(&window).unwrap_or(false);
 
-    if visible && onscreen {
+    #[cfg(target_os = "windows")]
+    let foreground = is_window_or_bubble_foreground_win32(&window, &app_handle).unwrap_or(false);
+
+    #[cfg(not(target_os = "windows"))]
+    let foreground = true;
+
+    if visible && onscreen && foreground {
         #[cfg(target_os = "windows")]
         {
             hide_window_win32(&window)?;
@@ -1044,6 +1098,42 @@ pub fn set_show_calendar(db: State<Database>, show: bool) -> Result<(), String> 
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('show_calendar', ?, datetime('now', 'localtime'))",
             [if show { "true" } else { "false" }],
+        )?;
+        Ok(())
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// 获取日历是否显示已完成事项。
+/// 该偏好仅保存在本机，不加入导入导出和 WebDAV 同步数据。
+#[tauri::command]
+pub fn get_calendar_show_completed(db: State<Database>) -> Result<bool, String> {
+    db.with_connection(|conn| {
+        let show_completed: bool = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'calendar_show_completed'",
+                [],
+                |row| {
+                    let val: String = row.get(0)?;
+                    Ok(val == "true")
+                },
+            )
+            .unwrap_or(true);
+        Ok(show_completed)
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// 设置日历是否显示已完成事项。
+#[tauri::command]
+pub fn set_calendar_show_completed(
+    db: State<Database>,
+    show_completed: bool,
+) -> Result<(), String> {
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('calendar_show_completed', ?, datetime('now', 'localtime'))",
+            [if show_completed { "true" } else { "false" }],
         )?;
         Ok(())
     })

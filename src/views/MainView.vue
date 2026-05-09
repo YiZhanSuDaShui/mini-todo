@@ -56,7 +56,10 @@ function handleCalendarToday() {
 }
 
 // 所有待办（用于日历显示）
-const allTodos = computed(() => todoStore.todos)
+const calendarTodos = computed(() => {
+  if (appStore.calendarShowCompleted) return todoStore.todos
+  return todoStore.todos.filter(todo => !todo.completed)
+})
 
 // 已完成数量
 const completedCount = computed(() => todoStore.todoCount.completed)
@@ -347,6 +350,7 @@ onMounted(async () => {
 
   unlistenCalendarSettingChanged = await listen('calendar-setting-changed', async () => {
     await appStore.loadShowCalendar()
+    await appStore.loadCalendarShowCompleted()
   })
 
   // 初始化自动同步
@@ -565,6 +569,7 @@ async function openSettings() {
       activeModalWindow = null
       await todoStore.fetchTodos()
       await appStore.loadShowCalendar()
+      await appStore.loadCalendarShowCompleted()
       startAutoSync()
     })
     
@@ -752,7 +757,7 @@ function stopAutoUpload() {
       <div v-if="showCalendarPanel" class="right-panel" :class="{ 'dark-theme': appStore.isDarkTheme }">
         <CalendarView
           ref="calendarRef"
-          :todos="allTodos"
+          :todos="calendarTodos"
           :is-dark-theme="appStore.isDarkTheme"
           @select-todo="openEditor"
         />

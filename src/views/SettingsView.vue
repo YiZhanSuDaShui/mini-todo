@@ -39,6 +39,7 @@ const currentConfigId = computed(() => appStore.currentScreenConfigId)
 
 // 日历显示
 const showCalendar = computed(() => appStore.showCalendar)
+const hideCompletedInCalendar = computed(() => !appStore.calendarShowCompleted)
 const floatingBubbleEnabled = computed(() => appStore.isFixed)
 
 // 是否有更新
@@ -79,6 +80,7 @@ onMounted(async () => {
   
   // 加载日历显示状态
   await appStore.loadShowCalendar()
+  await appStore.loadCalendarShowCompleted()
   
   // 加载 WebDAV 同步设置
   await loadSyncSettings()
@@ -307,6 +309,17 @@ async function handleShowCalendarChange(value: string | number | boolean) {
   const show = value === true
   await appStore.setShowCalendar(show)
   await emit('calendar-setting-changed', { show })
+}
+
+async function handleHideCompletedInCalendarChange(value: string | number | boolean) {
+  const hideCompleted = value === true
+  try {
+    await appStore.setCalendarShowCompleted(!hideCompleted)
+    await emit('calendar-setting-changed', { calendarShowCompleted: !hideCompleted })
+    ElMessage.success(hideCompleted ? '日历已隐藏已完成事项' : '日历已显示已完成事项')
+  } catch (e) {
+    ElMessage.error('设置日历已完成事项显示失败: ' + String(e))
+  }
 }
 
 // 切换软件通知位置
@@ -695,6 +708,20 @@ async function handleCheckUpdate() {
             <el-switch
               :model-value="appStore.isDarkTheme"
               @change="() => appStore.toggleDarkTheme()"
+            />
+          </div>
+
+          <div class="settings-row">
+            <div class="row-left">
+              <el-icon class="row-icon"><Calendar /></el-icon>
+              <div class="row-content">
+                <span class="settings-label">隐藏已完成事项（日历中）</span>
+                <span class="settings-desc">开启后已完成事项不在日历中显示，仅保存在本机</span>
+              </div>
+            </div>
+            <el-switch
+              :model-value="hideCompletedInCalendar"
+              @change="handleHideCompletedInCalendarChange"
             />
           </div>
 

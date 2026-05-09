@@ -36,6 +36,7 @@ let latestDragCursorX = 0
 let latestDragCursorY = 0
 let mainWindowShownByBubble = false
 let lastToggleAt = 0
+let togglingMainWindow = false
 let movedBeyondClickThreshold = false
 let suppressClickUntil = 0
 let dragStart: {
@@ -259,26 +260,32 @@ function scheduleSnap() {
 
 async function toggleMainWindow() {
   const now = performance.now()
+  if (togglingMainWindow) return
   if (now - lastToggleAt < 350) return
   lastToggleAt = now
+  togglingMainWindow = true
 
   try {
-    mainWindowShownByBubble = await invoke<boolean>('toggle_main_window')
+    try {
+      mainWindowShownByBubble = await invoke<boolean>('toggle_main_window')
+      void reinforceTopmost()
+      return
+    } catch (e) {
+      console.warn('后端切换主窗口命令不可用，使用前端兜底:', e)
+    }
+
+    if (mainWindowShownByBubble) {
+      await invoke('hide_main_window')
+      mainWindowShownByBubble = false
+      return
+    }
+
+    await invoke('show_main_window')
+    mainWindowShownByBubble = true
     void reinforceTopmost()
-    return
-  } catch (e) {
-    console.warn('后端切换主窗口命令不可用，使用前端兜底:', e)
+  } finally {
+    togglingMainWindow = false
   }
-
-  if (mainWindowShownByBubble) {
-    await invoke('hide_main_window')
-    mainWindowShownByBubble = false
-    return
-  }
-
-  await invoke('show_main_window')
-  mainWindowShownByBubble = true
-  void reinforceTopmost()
 }
 
 function handlePointerDown(event: PointerEvent) {
